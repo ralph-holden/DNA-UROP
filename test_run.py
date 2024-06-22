@@ -21,8 +21,7 @@ print(test.dnastr_B)
 
 print()
 print('for DNA A, the final end to end distance is', test.end_to_end()[0])
-print('for DNA B, the final end to end distance is', test.end_to_end()[0])
-print('^ same values, coding error somewhere')
+print('for DNA B, the final end to end distance is', test.end_to_end()[1])
 print()
 print('total number of paired sites', test.total_adj(), '<- clearly incorrect')
 
