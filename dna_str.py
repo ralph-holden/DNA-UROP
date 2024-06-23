@@ -4,14 +4,25 @@ Created on Fri Jun 21 17:03:37 2024
 
 @author: 44775 Ralph Holden
 
-Nodes are one correllation length of KL theory
-
-Information encoded as string with positions on 'imaginary lattice', instead of using an ising lattice
+MODEL:
+    ball & sticks DNA - like polymer
+    balls / particles occupy sites on a lattice, joined up by straight sticks
+    balls / particles correspond to one correlation length as described in Kornyshev-Leiken theory
+        as such, for non homologous DNA, only one consecutive correlation length can have attractive charged double helix interactions
+    ball & stick model has translational freedom, can move & bend, but chain links are unable to stretch or twist
+        assuming then, that these stretches and twists occur instantaneously with respect to a DNA configuration, so can be accounted for simply as a perturbation of the energy
+    
+CODE & SIMULATION:
+    Information coded as list of 3D coordinates of DNA nodes on a simple cubic lattice (for now)
+    Metropolis algorithm (a Monte Carlo method) used to propagate DNA strands
+    Additional requirements for a random move are; excluded volume effects, keeping the strand intact, and keeping inside the simulation box (confined DNA, closed simulation)
 """
 # # # IMPORTS # # #
 import numpy as np
 from typing import Tuple
 import matplotlib.pyplot as plt
+
+import sys
 
 # # # UNITS # # #
 kb = 1
@@ -24,6 +35,17 @@ k = np.array([0, 0, 1])
 vector_list = [-i,i,-j,j,-k,k]
 
 # # # aux functions # # #
+def dot(vec1: np.array, vec2: np.array):
+    '''Calculate the dot product between two 3D vectors'''
+    return vec1[0]*vec2[0] + vec1[1]*vec2[1] + vec1[2]*vec2[2]
+
+def norm(vec):
+    '''Calculate the norm of the 2D vector'''
+    return (vec[0]**2 + vec[1]**2 + vec[2]**2)**0.5
+
+def angle(vec1, vec2):
+    return np.arccos( dot(vec1,vec2) / ( norm(vec1)*norm(vec2) ) )
+
 def gen_adj_sites(dna_list: list, index: int) -> list:
     '''Given a segment in a DNA string, outputs all adjacent sites as a list of lists
     Currently, for simple cubic lattice
@@ -47,18 +69,18 @@ def gen_closeadj_sites(dna_list: list, index: int) -> list:
         list_out.append(list(dna_list[index]-vec))
     return list_out
 
-def count_adj_same(str_s: list, index: int) -> float:
+def count_adj_same(str_s: list, index: int) -> int:
     '''Counts total number of paired segments within the same DNA strand
     for single specified segment only
-    considering ONLY CLOSEST adjacent sites
+    considering ALL adjacent sites, otherwise count does not work
     '''
     count = -2 #does not include required neighbours
     for seg in str_s:
-        if list(seg) in gen_closeadj_sites(str_s, index):
+        if list(seg) in gen_adj_sites(str_s, index):
             count += 1 
     return count
     
-def count_adj_other(str_A: list, index: int, str_B: list):
+def count_adj_other(str_A: list, index: int, str_B: list) -> int:
     '''Counts the total number of paired segments with the other DNA strand
     for single specified segment only
     considering ONLY CLOSEST adjacent sites
@@ -67,10 +89,13 @@ def count_adj_other(str_A: list, index: int, str_B: list):
     for seg in str_B:
         if list(seg) in gen_closeadj_sites(str_A, index):
             count += 1 
-    return count
+    return count        
+    
 
 # # # Monte Carlo Model Class # # #
 class dna_string_model:
+    
+    n_steps = 0
     
     def __init__(self, n_x: int, n_y: int, n_z: int, dna_A_start: int, dna_B_start: int, dna_lengths: int):
         # lattice / 'box'
@@ -87,6 +112,9 @@ class dna_string_model:
         for seg in range(self.lengths):
             self.dnastr_A.append(np.array( [ dna_A_start[0], dna_A_start[1]+seg, dna_A_start[2] ] ))
             self.dnastr_B.append(np.array( [ dna_B_start[0], dna_B_start[1]+seg, dna_B_start[2] ] ))
+        self.trajectories = [[self.dnastr_A, self.dnastr_B]]
+        self.interactivity_A = []
+        self.interactivity_B = []
     
     # CHECKS for valid move
     def check_excvol(self, proposed_change: np.array) -> bool:
@@ -130,18 +158,83 @@ class dna_string_model:
         '''Needs to be for each set of paired DNA'''
         #could use the sum of adjacent sites
         
+    def condition_interactivity(self, AorB: str, fororbac: int, first: bool, seg: int, num: int) -> Tuple[int]:
+        '''Defines an interaction as attractive (1) if it is 'standalone', otherwise repulsive (-1) or no interaction (0)
+        '''
+        if AorB == 'A':
+            dnastr_s = self.dnastr_A
+            dnastr_o = self.dnastr_B
+            interactivity = self.interactivity_A
+        elif AorB == 'B':
+            dnastr_s = self.dnastr_B
+            dnastr_o = self.dnastr_A
+            interactivity = self.interactivity_B
+            
+        if first:
+            if count_adj_same(dnastr_s, seg) + count_adj_other(dnastr_s, seg, dnastr_o) >= num:
+                return [1]
+            else:
+                return [0]
+            
+        if count_adj_same(dnastr_s, seg) + count_adj_other(dnastr_s, seg, dnastr_o) >= num and abs(interactivity[seg+fororbac]) != 1:
+            return [1]
+        elif count_adj_same(dnastr_s, seg) + count_adj_other(dnastr_s, seg, dnastr_o) >= num and abs(interactivity[seg+fororbac]) == 1: 
+            return [-1]
+        else:
+            return [0]
+        
+    def gen_interactivity(self) -> list:
+        '''Prioritises sticking to middle (first assigned hence without dependance on +- 1)
+        Chooses random index in middle to start on'''
+        # starter
+        random_start_index = np.random.randint(int(self.lengths/5),int(4*self.lengths/5))
+        self.interactivity_A = self.condition_interactivity('A', 0, True, random_start_index, 3)
+        self.interactivity_B = self.condition_interactivity('B', 0, True, random_start_index, 3)
+        
+        # forwards
+        for seg in range(random_start_index,self.lengths-1): 
+            self.interactivity_A += self.condition_interactivity('A', -1, False, seg, 3)
+            self.interactivity_B += self.condition_interactivity('B', -1, False, seg, 3)
+            
+        # end (from forwards)
+        self.interactivity_A += self.condition_interactivity('A', -1, False, seg, 2)
+        self.interactivity_B += self.condition_interactivity('B', -1, False, seg, 2)
+        
+        # backwards
+        for seg in np.linspace(random_start_index-1, 1, random_start_index-2):
+            self.interactivity_A = self.condition_interactivity('A', +1, False, seg, 3) + self.interactivity_A
+            self.interactivity_B = self.condition_interactivity('B', +1, False, seg, 3) + self.interactivity_B
+            
+        # end (from backwards)
+        self.interactivity_A = self.condition_interactivity('A', +1, False, seg, 2) + self.interactivity_A
+        self.interactivity_B = self.condition_interactivity('B', +1, False, seg, 2) + self.interactivity_B
+        
     # for energies of Metropolis
+    def eng_elastic_pb(self, dnastr, seg_index: int) -> float:
+            vec1 = dnastr[seg_index-1] - dnastr[seg_index]
+            vec2 = dnastr[seg_index+1] - dnastr[seg_index]
+            return 0.05 * (angle(vec1, vec2) - np.pi)**2 # completely arbitrary!
+    
     def eng_elastic(self, str_1: list, str_2: list) -> float:
         '''Energy term for bending of DNA strand from straight
         INCOMPLETE
         '''
-        return 0
+        energy = 0
+        for seg_index in range(1,self.lengths-1):
+            energy += self.eng_elastic_pb(self.dnastr_A, seg_index)
+            energy += self.eng_elastic_pb(self.dnastr_B, seg_index)
+        return energy
     
     def eng_elec(self, str_1: list, str_2: list) -> float:
         '''Energy term for electrostatic interactions
         *** IMPORTANT *** must contain condition that if multiple segments in a row are paired, the latter interaction is REPULSIVE
         '''
-        return 0
+        factor = 1 # completely arbitrary
+        return np.sum(factor*np.array(self.interactivity_A) + factor*np.array(self.interactivity_B))
+    
+    def eng(self) -> float:
+        '''Returns total energy of current configuration'''
+        return self.eng_elastic(self.dnastr_A,self.dnastr_B) + self.eng_elec(self.dnastr_A,self.dnastr_B)
         
     # montecarlo step using metropolis algorithm
     def montecarlostep(self):
@@ -152,7 +245,7 @@ class dna_string_model:
         # choose random dna string, segment and vector
         dnastr_rand = np.random.randint(2)
         index_rand = np.random.randint(self.lengths)
-        vector_rand = vector_list[np.random.randint(5)]
+        vector_rand = vector_list[np.random.randint(6)]
         
         # apply random change
         dnastr_chosen = [self.dnastr_A,self.dnastr_B][dnastr_rand]
@@ -161,7 +254,7 @@ class dna_string_model:
         
         # test random change against simulation requirements; intact, no overlap, confinement
         if self.check_excvol(dnastr_new[index_rand]) and self.check_strintact(dnastr_new,index_rand) and self.check_inbox(dnastr_new[index_rand]):
-            energy_old = self.eng_elastic(self.dnastr_A,self.dnastr_B) + self.eng_elec(self.dnastr_A,self.dnastr_B)
+            energy_old = self.eng()
             energy_new = self.eng_elastic(dnastr_new,dnastr_other) + self.eng_elec(dnastr_new, dnastr_other)
             delt_eng = energy_new - energy_old
             # could use the index and its neighbours to calculate the energy change directly
@@ -172,6 +265,8 @@ class dna_string_model:
                 elif dnastr_rand == 1:
                     self.dnastr_B[index_rand] = dnastr_new[index_rand]
                     
+                self.trajectories.append([self.dnastr_A,self.dnastr_B])
+                    
             elif delt_eng >= 0:
                 random_factor = np.random.random()
                 boltzmann_factor = np.e**(-1*delt_eng/(kb*temp)) # delt_eng in kb units
@@ -180,26 +275,41 @@ class dna_string_model:
                         self.dnastr_A[index_rand] = dnastr_new[index_rand]
                     elif dnastr_rand == 1:
                         self.dnastr_B[index_rand] = dnastr_new[index_rand]
+                        
+                    self.trajectories.append([self.dnastr_A,self.dnastr_B])
+                    
+        self.n_steps += 1
         
     # functions for data
-    def total_adj(self) -> float:
+    def statistics_inst(self) -> Tuple[float, Tuple[int,int,int,int], Tuple[float,float], int]:
+        """Returns the averaged values of energy"""
+        return [self.eng(), [self.total_adj()], [self.end_to_end()], self.n_steps]
+    
+    ### NEED TO MAKE FUNCTION / CHANGE ARCHITECTURE TO HAVE RUNNING AVERAGES OF DATA, NOT JUST FINAL
+    
+    def total_adj(self) -> Tuple[int, int, int]:
         '''Simply sums total adjacent segments, not including between direct chain connections
         Uses the functions; count_adj_same & count_adj_other
         NOTE: only consideres (6) closest adjacent sites
         '''
-        tot_count = 2*2*2 #cancles out -2 from each end segment
+        same_A_count = 2*2 # cancels out -2 from each end segment
+        same_B_count = 2*2
+        other_count = 0
+        tot_count = 0 
         for seg in range(self.lengths):
-            tot_count += count_adj_same(self.dnastr_A, seg)/2
-            tot_count += count_adj_same(self.dnastr_B, seg)/2
-            tot_count += count_adj_other(self.dnastr_A, seg, self.dnastr_B)
-        return tot_count
+            same_A_count += count_adj_same(self.dnastr_A, seg)/2
+            same_B_count += count_adj_same(self.dnastr_B, seg)/2
+            other_count += count_adj_other(self.dnastr_A, seg, self.dnastr_B)
+        tot_count = same_A_count + same_B_count + other_count 
+            
+        return tot_count, same_A_count, same_B_count, other_count
     
     def end_to_end(self) -> Tuple[float, float]:
-        return [np.linalg.norm(self.dnastr_A[0]-self.dnastr_A[-1]), np.linalg.norm(self.dnastr_B[0]-self.dnastr_B[-1])]
+        return np.linalg.norm(self.dnastr_A[0]-self.dnastr_A[-1]), np.linalg.norm(self.dnastr_B[0]-self.dnastr_B[-1])
     
     # # # visualise # # #
     # 2D projection
-    def proj_2d(self):
+    def proj_2d(self, fullbox = True):
         Ax_points = np.array(self.dnastr_A)[:,0]
         Ay_points = np.array(self.dnastr_A)[:,1]
         Az_points = np.array(self.dnastr_A)[:,2]
@@ -210,21 +320,36 @@ class dna_string_model:
         plt.figure()
         plt.subplot(1,2,1)
         plt.title('XY plane')
-        plt.plot(Ax_points, Ay_points, marker='o')
-        plt.plot(Bx_points, By_points, marker='o')
-        plt.xlim(self.xmin,self.xmax)
-        plt.ylim(self.ymin,self.ymax)
+        plt.plot(Ax_points, Ay_points, marker='o', markersize=0.5)
+        plt.plot(Bx_points, By_points, marker='o', markersize=0.5)
+        if fullbox:
+            plt.xlim(self.xmin,self.xmax)
+            plt.ylim(self.ymin,self.ymax)
         plt.grid()
         
         plt.subplot(1,2,2)
         plt.title('XZ plane')
-        plt.plot(Ax_points, Az_points, marker='o')
-        plt.plot(Bx_points, Bz_points, marker='o')
-        plt.xlim(self.xmin,self.xmax)
-        plt.ylim(self.zmin,self.zmax)
+        plt.plot(Ax_points, Az_points, marker='o', markersize=0.5)
+        plt.plot(Bx_points, Bz_points, marker='o', markersize=0.5)
+        if fullbox:
+            plt.xlim(self.xmin,self.xmax)
+            plt.ylim(self.zmin,self.zmax)
         plt.grid()
         
         plt.tight_layout(pad=1)
         plt.show()
+        
+    # # # A bit of fun for the running of the simulation
+    def do_steps(self,nsteps):
+        '''Runs the Monte Carlo algorithm for given number of steps with a progress bar'''
+        for i, item in enumerate(range(nsteps)):
+            self.montecarlostep()
+            
+            length = 20
+            progress = (i + 1) / nsteps
+            bar_length = int(length * progress)
+            bar = f"[{'=' * bar_length:{length}}] {progress * 100:.1f}%"
+            sys.stdout.write(f"\r{bar}")
+            sys.stdout.flush()
 
     
