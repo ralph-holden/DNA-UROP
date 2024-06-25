@@ -5,11 +5,24 @@ Created on Sat Jun 22 10:53:49 2024
 @author: 44775 Ralph Holden
 """
 from dna_str import *
-import pickle
 
-test = dna_string_model(100, 100, 100, [-1, -50, 0], [1, -50, 0], 100)
-   
-test.do_steps(nsteps = 100000)
+import pickle
+import sys
+
+test = dna_string_model(100, 100, 100, [-2, -50, 0], [2, -50, 0], 1000)
+
+# Run the Monte Carlo algorithm for given number of steps with a progress bar
+nsteps = 1000
+
+for i, item in enumerate(range(nsteps)):
+    test.montecarlostep_gen2()
+    
+    length = 20
+    progress = (i + 1) / nsteps
+    bar_length = int(length * progress)
+    bar = f"[{'=' * bar_length:{length}}] {progress * 100:.1f}%"
+    sys.stdout.write(f"\r{bar}")
+    sys.stdout.flush()
     
 print()
 print('dnastr_A')
