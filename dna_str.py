@@ -30,7 +30,11 @@ temp = 300
 i = np.array([1, 0, 0])
 j = np.array([0, 1, 0])
 k = np.array([0, 0, 1])
-vector_list = [-i,i,-j,j,-k,k]
+
+vector_list = [] # this is used for moving the segments
+for n in [i+j, i-j, i+k, i-k, j+k, j-k]:
+    vector_list.append(n/(2**0.5))
+    vector_list.append(-n/(2**0.5)) 
 
 # # # aux functions # # #
 def dot(vec1: np.array, vec2: np.array):
@@ -44,13 +48,14 @@ def norm(vec):
 def angle(vec1, vec2):
     return np.arccos( dot(vec1,vec2) / ( norm(vec1)*norm(vec2) ) )
 
+# # # aux functions # # #
+
 def gen_adj_sites(dna_list: list, index: int) -> list:
     '''Given a segment in a DNA string, outputs all adjacent sites as a list of lists
-    Currently, for simple cubic lattice
+    For 12 closest sites on an FCC lattice
     '''
     list_out = []
-    vector_adj = [i, j, k, i+j, i-j, i+k, i-k, j+k, j-k, i+j+k, i+j-k, i-j-k, i-j+k]
-    for vec in vector_adj:
+    for vec in vector_list:
         list_out.append(list(dna_list[index]+vec))
         list_out.append(list(dna_list[index]-vec))
     return list_out
@@ -72,7 +77,7 @@ def count_adj_same(str_s: list, index: int) -> int:
     for single specified segment only
     considering ALL adjacent sites, otherwise count does not work
     '''
-    count = -2 #does not include required neighbours
+    count = 0 #does not include required neighbours
     for seg in str_s:
         if list(seg) in gen_adj_sites(str_s, index):
             count += 1 
@@ -227,9 +232,9 @@ class dna_string_model:
         
     def propose_change(self, dnastr_A_new, dnastr_B_new, index_rand):
     
-        vector_list_zero = vector_list + [0]
-        vector_A_rand = vector_list_zero[np.random.randint(7)]
-        vector_B_rand = vector_list_zero[np.random.randint(7)]
+        vector_list_zero = vector_list + [np.array([0.0])]
+        vector_A_rand = vector_list_zero[np.random.randint(13)] # length of list is 13, indexes 0-12
+        vector_B_rand = vector_list_zero[np.random.randint(13)]
 
         dnastr_A_prop = dnastr_A_new[:index_rand] + [dnastr_A_new[index_rand]+vector_A_rand] + dnastr_A_new[index_rand+1:]
 
@@ -241,7 +246,7 @@ class dna_string_model:
     def eng_elastic_pb(self, dnastr, seg_index: int) -> float:
         vec1 = dnastr[seg_index-1] - dnastr[seg_index]
         vec2 = dnastr[seg_index+1] - dnastr[seg_index]
-        return 0.05 * (angle(vec1, vec2) - np.pi)**2 # completely arbitrary!
+        return 1000 * (angle(vec1, vec2) - np.pi)**2 # completely arbitrary!
     
     def eng_elastic(self, str_1: list, str_2: list) -> float:
         '''Energy term for bending of DNA strand from straight
@@ -257,7 +262,7 @@ class dna_string_model:
         '''Energy term for electrostatic interactions
         *** IMPORTANT *** must contain condition that if multiple segments in a row are paired, the latter interaction is REPULSIVE
         '''
-        factor = -1 # completely arbitrary, but from interactivity needs to be negative
+        factor = -0.1 # completely arbitrary, but from interactivity needs to be negative
         return np.sum(factor*np.array(self.interactivity_A) + factor*np.array(self.interactivity_B))
     
     def eng(self) -> float:
@@ -273,7 +278,7 @@ class dna_string_model:
         # choose random dna string, segment and vector
         dnastr_rand = np.random.randint(2)
         index_rand = np.random.randint(self.lengths)
-        vector_rand = vector_list[np.random.randint(6)]
+        vector_rand = vector_list[np.random.randint(13)]
         
         # apply random change
         dnastr_chosen = [self.dnastr_A,self.dnastr_B][dnastr_rand]
