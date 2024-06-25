@@ -120,13 +120,31 @@ class dna_string_model:
     def check_excvol(self, proposed_change: np.array) -> bool:
         '''Outputs boolean for if the proposed change in the metropolis algorithm overlaps with the coordinates of another segment
         True if NO excluded volume errors, False if coordinate overlap
+        NOTE: in first generation montecarlostep(), the segment HAS to move and therefore coincide with any of the previous / OLD strand
         '''
         for i in range(self.lengths):
             if list(proposed_change) == list(self.dnastr_A[i]):
                 return False
             if list(proposed_change) == list(self.dnastr_B[i]):
                 return False
-            return True
+        return True # only AFTER checking ALL DNA strand sites for a False / failure 
+        
+    def check_excvol_gen2(self, dnastr_A_prop: list, dnastr_B_prop: list, index_prop: int) -> bool:
+        '''Outputs boolean for if the proposed change in the metropolis algorithm overlaps with the coordinates of another segment
+        True if NO excluded volume errors, False if coordinate overlap
+        NOTE: must allow DNA segments to stay in the same place, but need to avoid flagging up excluded volume error
+        '''
+        proposed_change_A = dnastr_A_prop[index_prop]
+        proposed_change_B = dnastr_B_prop[index_prop]
+        for i in range(self.lengths):
+            if index_prop != i: # ignore proposals that stayed in the same place
+                if list(proposed_change_A) == list(dnastr_A_prop[i]) or list(proposed_change_B) == list(dnastr_B_prop[i]):
+                    return False # excluded volume error with self
+            if list(proposed_change_A) == list(dnastr_B_prop[i]) or list(proposed_change_B) == list(dnastr_A_prop[i]):
+                return False # excluded volume error with other strand
+            if list(proposed_change_A) == list(proposed_change_B):
+                return False # special case, both DNA segments trying to move into the same place
+        return True # only AFTER checking ALL DNA strand sites for a False / failure
     
     def check_strintact(self, dnastr: list, index: int) -> bool:
         ''' Outputs boolean for if the segment of the proposed change is still adjacent (including diagnols of technically greater length) to its neighbouring segments
@@ -139,7 +157,7 @@ class dna_string_model:
         elif index == self.lengths - 1: # end segment
             if list(dnastr[index-1]) in adjacent_sites:
                 return True
-        else:
+        else: # any middle segment
             if list(dnastr[index-1]) in adjacent_sites and list(dnastr[index+1]) in adjacent_sites:
                 return True
         return False
@@ -192,7 +210,7 @@ class dna_string_model:
         self.interactivity_B = self.condition_interactivity('B', 0, True, random_start_index, 3)
         
         # forwards
-        for seg in range(random_start_index,self.lengths-1): 
+        for seg in range(random_start_index+1,self.lengths-1): # from index+1 to penultimate
             self.interactivity_A += self.condition_interactivity('A', -1, False, seg, 3)
             self.interactivity_B += self.condition_interactivity('B', -1, False, seg, 3)
             
@@ -201,7 +219,7 @@ class dna_string_model:
         self.interactivity_B += self.condition_interactivity('B', -1, False, seg, 2)
         
         # backwards
-        for seg in np.linspace(random_start_index-1, 1, random_start_index-2):
+        for seg in np.linspace(random_start_index-1, 1, random_start_index-1): # from index-1 to second index
             self.interactivity_A = self.condition_interactivity('A', +1, False, seg, 3) + self.interactivity_A
             self.interactivity_B = self.condition_interactivity('B', +1, False, seg, 3) + self.interactivity_B
             
@@ -209,11 +227,23 @@ class dna_string_model:
         self.interactivity_A = self.condition_interactivity('A', +1, False, seg, 2) + self.interactivity_A
         self.interactivity_B = self.condition_interactivity('B', +1, False, seg, 2) + self.interactivity_B
         
+    def propose_change(self, dnastr_A_new, dnastr_B_new, index_rand):
+    
+        vector_list_zero = vector_list + [0]
+        vector_A_rand = vector_list_zero[np.random.randint(7)]
+        vector_B_rand = vector_list_zero[np.random.randint(7)]
+
+        dnastr_A_prop = dnastr_A_new[:index_rand] + [dnastr_A_new[index_rand]+vector_A_rand] + dnastr_A_new[index_rand+1:]
+
+        dnastr_B_prop = dnastr_B_new[:index_rand] + [dnastr_B_new[index_rand]+vector_B_rand] + dnastr_B_new[index_rand+1:]
+
+        return dnastr_A_prop, dnastr_B_prop
+        
     # for energies of Metropolis
     def eng_elastic_pb(self, dnastr, seg_index: int) -> float:
-            vec1 = dnastr[seg_index-1] - dnastr[seg_index]
-            vec2 = dnastr[seg_index+1] - dnastr[seg_index]
-            return 0.05 * (angle(vec1, vec2) - np.pi)**2 # completely arbitrary!
+        vec1 = dnastr[seg_index-1] - dnastr[seg_index]
+        vec2 = dnastr[seg_index+1] - dnastr[seg_index]
+        return 0.05 * (angle(vec1, vec2) - np.pi)**2 # completely arbitrary!
     
     def eng_elastic(self, str_1: list, str_2: list) -> float:
         '''Energy term for bending of DNA strand from straight
@@ -229,7 +259,7 @@ class dna_string_model:
         '''Energy term for electrostatic interactions
         *** IMPORTANT *** must contain condition that if multiple segments in a row are paired, the latter interaction is REPULSIVE
         '''
-        factor = 1 # completely arbitrary
+        factor = -1 # completely arbitrary, but from interactivity needs to be negative
         return np.sum(factor*np.array(self.interactivity_A) + factor*np.array(self.interactivity_B))
     
     def eng(self) -> float:
@@ -278,6 +308,55 @@ class dna_string_model:
                         
                     self.trajectories.append([self.dnastr_A,self.dnastr_B])
                     
+        self.n_steps += 1
+        
+    def montecarlostep_gen2(self):
+        '''Propagating step. Uses a Metropolis algorithm.
+        Each time method is called, entire system updated! New configuration then accepted or rejected.
+        '''
+        # random moves
+        # choose random dna index, in same fashion as interactivity, segment and vector
+        random_start_index = np.random.randint(int(self.lengths/5),int(4*self.lengths/5))
+        
+        # propose a single change to the DNA strands until it meets the conditions, then initalise build of NEW DNA strands
+        dnastr_A_prop, dnastr_B_prop = self.propose_change(self.dnastr_A, self.dnastr_B, random_start_index) # propose change to random_start_index
+        # test random change against simulation requirements; intact, no overlap, confinement
+        while not self.check_excvol_gen2(dnastr_A_prop,dnastr_B_prop,random_start_index) and not self.check_strintact(dnastr_A_prop,random_start_index) and not self.check_strintact(dnastr_A_prop,random_start_index) and not self.check_inbox(dnastr_A_prop[random_start_index]) and not self.check_inbox(dnastr_B_prop[random_start_index]):
+            dnastr_A_prop, dnastr_B_prop = self.propose_change(self.dnastr_A, self.dnastr_B, random_start_index) # propose new change until satisfied
+        dnastr_A_new, dnastr_B_new = dnastr_A_prop, dnastr_B_prop # proposed change works with simulation rules
+        
+        # forwards
+        for seg_index in range(random_start_index+1, self.lengths): 
+            dnastr_A_prop, dnastr_B_prop = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose change to seg_index
+            # test random change against simulation requirements; intact, no overlap, confinement
+            while not self.check_excvol_gen2(dnastr_A_prop,dnastr_B_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_inbox(dnastr_A_prop[seg_index]) and not self.check_inbox(dnastr_B_prop[random_start_index]):
+                    dnastr_A_prop, dnastr_B_prop = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose new change until satisfied
+            dnastr_A_new, dnastr_B_new = dnastr_A_prop, dnastr_B_prop # proposed change works with simulation rules
+            
+        # backwards
+        for seg_index in np.linspace(random_start_index-1, 0, random_start_index):
+            seg_index = int(seg_index)
+            dnastr_A_new, dnastr_B_new = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose change
+            # test random change against simulation requirements; intact, no overlap, confinement
+            while not self.check_excvol_gen2(dnastr_A_prop,dnastr_B_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_inbox(dnastr_A_prop[seg_index]) and not self.check_inbox(dnastr_B_prop[random_start_index]):
+                    dnastr_A_prop, dnastr_B_prop = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose new change until satisfied     
+
+        energy_old = self.eng()
+        energy_new = self.eng_elastic(dnastr_A_new,dnastr_B_new) + self.eng_elec(dnastr_A_new, dnastr_B_new)
+        delt_eng = energy_new - energy_old
+            # could use the index and its neighbours to calculate the energy change directly
+
+        if delt_eng <= 0: # assign new string change, which has already 'passed' conditions from proposal 
+            self.dnastr_A, self.dnastr_B = dnastr_A_new, dnastr_B_new
+            self.trajectories.append([self.dnastr_A,self.dnastr_B])
+
+        elif delt_eng >= 0:
+            random_factor = np.random.random()
+            boltzmann_factor = np.e**(-1*delt_eng/(kb*temp)) # delt_eng in kb units
+            if random_factor < boltzmann_factor: # assign new string change
+                self.dnastr_A, self.dnastr_B = dnastr_A_new, dnastr_B_new
+                self.trajectories.append([self.dnastr_A,self.dnastr_B])
+
         self.n_steps += 1
         
     # functions for data
@@ -343,7 +422,7 @@ class dna_string_model:
     def do_steps(self,nsteps):
         '''Runs the Monte Carlo algorithm for given number of steps with a progress bar'''
         for i, item in enumerate(range(nsteps)):
-            self.montecarlostep()
+            self.montecarlostep_gen2()
             
             length = 20
             progress = (i + 1) / nsteps
@@ -351,5 +430,3 @@ class dna_string_model:
             bar = f"[{'=' * bar_length:{length}}] {progress * 100:.1f}%"
             sys.stdout.write(f"\r{bar}")
             sys.stdout.flush()
-
-    
