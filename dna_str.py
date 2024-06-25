@@ -22,8 +22,6 @@ import numpy as np
 from typing import Tuple
 import matplotlib.pyplot as plt
 
-import sys
-
 # # # UNITS # # #
 kb = 1
 temp = 300
@@ -417,16 +415,3 @@ class dna_string_model:
         
         plt.tight_layout(pad=1)
         plt.show()
-        
-    # # # A bit of fun for the running of the simulation
-    def do_steps(self,nsteps):
-        '''Runs the Monte Carlo algorithm for given number of steps with a progress bar'''
-        for i, item in enumerate(range(nsteps)):
-            self.montecarlostep_gen2()
-            
-            length = 20
-            progress = (i + 1) / nsteps
-            bar_length = int(length * progress)
-            bar = f"[{'=' * bar_length:{length}}] {progress * 100:.1f}%"
-            sys.stdout.write(f"\r{bar}")
-            sys.stdout.flush()
