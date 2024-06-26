@@ -420,3 +420,32 @@ class dna_string_model:
         
         plt.tight_layout(pad=1)
         plt.show()
+    
+    def proj_3d(self):
+        Ax_points = np.array(self.dnastr_A)[:,0]
+        Ay_points = np.array(self.dnastr_A)[:,1]
+        Az_points = np.array(self.dnastr_A)[:,2]
+        Bx_points = np.array(self.dnastr_B)[:,0]
+        By_points = np.array(self.dnastr_B)[:,1]
+        Bz_points = np.array(self.dnastr_B)[:,2]
+        
+        fig = plt.figure()
+        ax = plt.axes(projection='3d')
+        
+        x= Ax_points
+        y= Ay_points
+        z= Az_points 
+        
+        ax.plot3D(x, y, z, 'green')
+        
+        x= Bx_points
+        y= By_points
+        z= Bz_points 
+        
+        ax.plot3D(x, y, z, 'green')
+        
+        ax.set_xlabel('x ($l_c$)')
+        ax.set_ylabel('y ($l_c$)')
+        ax.set_zlabel('z ($l_c$)')
+        
+        plt.show()
