@@ -39,6 +39,7 @@ print('total number of paired sites', test.total_adj()[0])
 
 test.proj_2d(fullbox = True )
 test.proj_2d(fullbox = False)
+test.proj_3d()
 
 with open('test_simulation.dat','wb') as data_f:
     pickle.dump(test.trajectories, data_f)
