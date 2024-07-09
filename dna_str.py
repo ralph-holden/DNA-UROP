@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 
 # # # UNITS # # #
 kb = 1
-temp = 300
+temp = 310.15
 
 # # # VECTORS # # #
 i = np.array([1, 0, 0])
@@ -61,7 +61,9 @@ def gen_adj_sites(dna_list: list, index: int) -> list:
     return list_out
 
 def gen_closeadj_sites(dna_list: list, index: int) -> list:
-    '''Given a segment in a DNA string, outputs all adjacent sites as a list of lists
+    '''
+    * * * OUTDATED * * *
+    Given a segment in a DNA string, outputs all adjacent sites as a list of lists
     Currently, for simple cubic lattice
     closest (6) adjacent sites ONLY
     '''
@@ -99,6 +101,7 @@ def count_adj_other(str_A: list, index: int, str_B: list) -> int:
 class dna_string_model:
     
     n_steps = 0
+    mctime = 0
     
     def __init__(self, n_x: int, n_y: int, n_z: int, dna_A_start: int, dna_B_start: int, dna_lengths: int):
         # lattice / 'box'
@@ -113,8 +116,8 @@ class dna_string_model:
         self.dnastr_A = []
         self.dnastr_B = []
         for seg in range(self.lengths):
-            self.dnastr_A.append(np.array( [ dna_A_start[0], dna_A_start[1]+seg, dna_A_start[2] ] ))
-            self.dnastr_B.append(np.array( [ dna_B_start[0], dna_B_start[1]+seg, dna_B_start[2] ] ))
+            self.dnastr_A.append(np.array( [ dna_A_start[0], dna_A_start[1]+seg*vector_list[0], dna_A_start[2] ] ))
+            self.dnastr_B.append(np.array( [ dna_B_start[0], dna_B_start[1]+seg*vector_list[0], dna_B_start[2] ] ))
         self.trajectories = [[self.dnastr_A, self.dnastr_B]]
         self.interactivity_A = []
         self.interactivity_B = []
@@ -140,9 +143,9 @@ class dna_string_model:
         proposed_change_A = dnastr_A_prop[index_prop]
         proposed_change_B = dnastr_B_prop[index_prop]
         for i in range(self.lengths):
-            if index_prop != i: # ignore proposals that stayed in the same place
+            if index_prop not in [i-1,i,i+1]: # ignore proposals that stayed in the same place, or neighbour segments
                 if list(proposed_change_A) == list(dnastr_A_prop[i]) or list(proposed_change_B) == list(dnastr_B_prop[i]):
-                    return False # excluded volume error with self
+                    return False # excluded volume error with self, ignoring the neigbour segment for pseudo-lattice-elasticity
             if list(proposed_change_A) == list(dnastr_B_prop[i]) or list(proposed_change_B) == list(dnastr_A_prop[i]):
                 return False # excluded volume error with other strand
             if list(proposed_change_A) == list(proposed_change_B):
@@ -246,7 +249,9 @@ class dna_string_model:
     def eng_elastic_pb(self, dnastr, seg_index: int) -> float:
         vec1 = dnastr[seg_index-1] - dnastr[seg_index]
         vec2 = dnastr[seg_index+1] - dnastr[seg_index]
-        return 1000 * (angle(vec1, vec2) - np.pi)**2 # completely arbitrary!
+        return 1000 * (1 - np.cos(angle(vec1, vec2))**2) # completely arbitrary! 
+        # * * * UPDATE REQUIRED: need to use averaged angles * * *
+        # * * * UPDATE REQUIRED: need to use elastic rod model * * *
     
     def eng_elastic(self, str_1: list, str_2: list) -> float:
         '''Energy term for bending of DNA strand from straight
@@ -257,6 +262,10 @@ class dna_string_model:
             energy += self.eng_elastic_pb(self.dnastr_A, seg_index)
             energy += self.eng_elastic_pb(self.dnastr_B, seg_index)
         return energy
+
+    def entropic_bend(self):
+        return 0
+        # * * * UPDATE REQUIRED: need to incorporate into energy terms to give the FREE ENERGY * * *
     
     def eng_elec(self, str_1: list, str_2: list) -> float:
         '''Energy term for electrostatic interactions
@@ -267,7 +276,7 @@ class dna_string_model:
     
     def eng(self) -> float:
         '''Returns total energy of current configuration'''
-        return self.eng_elastic(self.dnastr_A,self.dnastr_B) + self.eng_elec(self.dnastr_A,self.dnastr_B)
+        return self.eng_elastic(self.dnastr_A,self.dnastr_B) + self.eng_elec(self.dnastr_A,self.dnastr_B) + self.entropic_bend()*temp
         
     # montecarlo step using metropolis algorithm
     def montecarlostep(self):
@@ -287,8 +296,8 @@ class dna_string_model:
         
         # test random change against simulation requirements; intact, no overlap, confinement
         if self.check_excvol(dnastr_new[index_rand]) and self.check_strintact(dnastr_new,index_rand) and self.check_inbox(dnastr_new[index_rand]):
-            energy_old = self.eng()
-            energy_new = self.eng_elastic(dnastr_new,dnastr_other) + self.eng_elec(dnastr_new, dnastr_other)
+            energy_old = self.eng() # * * * UPDATE REQUIRED: can remove to save computational cost * * *
+            energy_new = self.eng_elastic(dnastr_new,dnastr_other) + self.eng_elec(dnastr_new, dnastr_other) + self.entropic_bend()*temp
             delt_eng = energy_new - energy_old
             # could use the index and its neighbours to calculate the energy change directly
             
@@ -344,8 +353,8 @@ class dna_string_model:
             while not self.check_excvol_gen2(dnastr_A_prop,dnastr_B_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_inbox(dnastr_A_prop[seg_index]) and not self.check_inbox(dnastr_B_prop[random_start_index]):
                     dnastr_A_prop, dnastr_B_prop = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose new change until satisfied     
 
-        energy_old = self.eng()
-        energy_new = self.eng_elastic(dnastr_A_new,dnastr_B_new) + self.eng_elec(dnastr_A_new, dnastr_B_new)
+        energy_old = self.eng() # * * * UPDATE REQUIRED: can remove to save computational cost * * *
+        energy_new = self.eng_elastic(dnastr_new,dnastr_other) + self.eng_elec(dnastr_new, dnastr_other) + self.entropic_bend()*temp
         delt_eng = energy_new - energy_old
             # could use the index and its neighbours to calculate the energy change directly
 
@@ -361,6 +370,7 @@ class dna_string_model:
                 self.trajectories.append([self.dnastr_A,self.dnastr_B])
 
         self.n_steps += 1
+        self.mctime += 0 # * * * UPDATE REQUIRED: introduce dynamic Monte Carlo timestep * * *
         
     # functions for data
     def statistics_inst(self) -> Tuple[float, Tuple[int,int,int,int], Tuple[float,float], int]:
@@ -435,17 +445,14 @@ class dna_string_model:
         x= Ax_points
         y= Ay_points
         z= Az_points 
-        
-        ax.plot3D(x, y, z, 'green')
+        ax.plot3D(x, y, z, 'red')
         
         x= Bx_points
         y= By_points
         z= Bz_points 
-        
-        ax.plot3D(x, y, z, 'green')
+        ax.plot3D(x, y, z, 'blue')
         
         ax.set_xlabel('x ($l_c$)')
         ax.set_ylabel('y ($l_c$)')
         ax.set_zlabel('z ($l_c$)')
-        
         plt.show()
