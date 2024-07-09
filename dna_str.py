@@ -9,11 +9,11 @@ MODEL:
     balls / particles occupy sites on a lattice, joined up by straight sticks
     balls / particles correspond to one correlation length as described in Kornyshev-Leiken theory
         as such, for non homologous DNA, only one consecutive correlation length can have attractive charged double helix interactions
-    ball & stick model has translational freedom, can move & bend, but chain links are unable to stretch or twist
-        assuming then, that these stretches and twists occur instantaneously with respect to a DNA configuration, so can be accounted for simply as a perturbation of the energy
+    ball & stick model has translational freedom, can move & bend, is also pseudo-elastic, allowing motion 'down chain'
+        assuming then, that these twists occur instantaneously with respect to a DNA configuration, so can be accounted for simply as a perturbation of the energy
     
 CODE & SIMULATION:
-    Information coded as list of 3D coordinates of DNA nodes on a simple cubic lattice (for now)
+    Information coded as list of 3D coordinates of DNA nodes on an FCC lattice
     Metropolis algorithm (a Monte Carlo method) used to propagate DNA strands
     Additional requirements for a random move are; excluded volume effects, keeping the strand intact, and keeping inside the simulation box (confined DNA, closed simulation)
 """
@@ -209,7 +209,10 @@ class dna_string_model:
         
     def gen_interactivity(self) -> list:
         '''Prioritises sticking to middle (first assigned hence without dependance on +- 1)
-        Chooses random index in middle to start on'''
+        Chooses random index in middle to start on
+        NOTE 1: If segment occupies same lattice site as previous (stored length) the second interaction is repulsive (beyond correlation length)
+        NOTE 2: As adjacent sites ONLY are counted, stored lengths will not cause issues for interactivity count
+        '''
         # starter
         random_start_index = np.random.randint(int(self.lengths/5),int(4*self.lengths/5))
         self.interactivity_A = self.condition_interactivity('A', 0, True, random_start_index, 3)
