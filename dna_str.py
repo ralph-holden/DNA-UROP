@@ -110,7 +110,7 @@ class dna_string_model:
         self.ymin = -n_y
         self.ymax =  n_y
         self.zmin = -n_z
-        self.zmax =  n_z
+        self.zmax =  n_z # * * * UPDATE REQUIRED: make more concise, can use as single list, but need to update boundary requirements function * * *  
         # initialise straight DNA chains as strings with each unit as XYZ coordinates
         self.lengths = dna_lengths
         self.dnastr_A = []
@@ -212,6 +212,8 @@ class dna_string_model:
         Chooses random index in middle to start on
         NOTE 1: If segment occupies same lattice site as previous (stored length) the second interaction is repulsive (beyond correlation length)
         NOTE 2: As adjacent sites ONLY are counted, stored lengths will not cause issues for interactivity count
+
+        * * * UPDATE REQUIRED: make successive replusions greater in magnitude * * *
         '''
         # starter
         random_start_index = np.random.randint(int(self.lengths/5),int(4*self.lengths/5))
