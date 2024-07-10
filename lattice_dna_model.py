@@ -33,8 +33,8 @@ k = np.array([0, 0, 1])
 
 vector_list = [] # this is used for moving the segments
 for n in [i+j, i-j, i+k, i-k, j+k, j-k]:
-    vector_list.append(n/(2**0.5))
-    vector_list.append(-n/(2**0.5)) 
+    vector_list.append( n) # removing factors avoids boolean mistakes due to rounding errors
+    vector_list.append(-n) 
 
 # # # aux functions # # #
 def dot(vec1: np.array, vec2: np.array):
@@ -57,7 +57,6 @@ def gen_adj_sites(dna_list: list, index: int) -> list:
     list_out = []
     for vec in vector_list:
         list_out.append(list(dna_list[index]+vec))
-        list_out.append(list(dna_list[index]-vec))
     return list_out
 
 def gen_closeadj_sites(dna_list: list, index: int) -> list:
@@ -98,7 +97,7 @@ def count_adj_other(str_A: list, index: int, str_B: list) -> int:
     
 
 # # # Monte Carlo Model Class # # #
-class dna_string_model:
+class lattice_dna:
     
     n_steps = 0
     mctime = 0
@@ -113,11 +112,15 @@ class dna_string_model:
         self.zmax =  n_z # * * * UPDATE REQUIRED: make more concise, can use as single list, but need to update boundary requirements function * * *  
         # initialise straight DNA chains as strings with each unit as XYZ coordinates
         self.lengths = dna_lengths
-        self.dnastr_A = []
-        self.dnastr_B = []
+        self.dnastr_A = [np.array( [ dna_A_start[0], dna_A_start[1], dna_A_start[2] ] )]
+        self.dnastr_B = [np.array( [ dna_B_start[0], dna_B_start[1], dna_B_start[2] ] )]
         for seg in range(self.lengths):
-            self.dnastr_A.append(np.array( [ dna_A_start[0], dna_A_start[1]+seg*vector_list[0], dna_A_start[2] ] ))
-            self.dnastr_B.append(np.array( [ dna_B_start[0], dna_B_start[1]+seg*vector_list[0], dna_B_start[2] ] ))
+            if seg%2 == 0:
+                self.dnastr_A.append(self.dnastr_A[-1])
+                self.dnastr_B.append(self.dnastr_B[-1])
+            else:
+                self.dnastr_A.append(self.dnastr_A[-1] + vector_list[0])
+                self.dnastr_B.append(self.dnastr_B[-1] + vector_list[0])
         self.trajectories = [[self.dnastr_A, self.dnastr_B]]
         self.interactivity_A = []
         self.interactivity_B = []
@@ -142,30 +145,31 @@ class dna_string_model:
         '''
         proposed_change_A = dnastr_A_prop[index_prop]
         proposed_change_B = dnastr_B_prop[index_prop]
-        for i in range(self.lengths):
-            if index_prop not in [i-1,i,i+1]: # ignore proposals that stayed in the same place, or neighbour segments
-                if list(proposed_change_A) == list(dnastr_A_prop[i]) or list(proposed_change_B) == list(dnastr_B_prop[i]):
-                    return False # excluded volume error with self, ignoring the neigbour segment for pseudo-lattice-elasticity
-            if list(proposed_change_A) == list(dnastr_B_prop[i]) or list(proposed_change_B) == list(dnastr_A_prop[i]):
-                return False # excluded volume error with other strand
-            if list(proposed_change_A) == list(proposed_change_B):
-                return False # special case, both DNA segments trying to move into the same place
+        for seg in range(self.lengths):
+            if index_prop not in [seg-1,seg,seg+1]: # ignore proposals that stayed in the same place, or neighbour segments
+                if list(proposed_change_A) == list(dnastr_A_prop[seg]) or list(proposed_change_B) == list(dnastr_B_prop[seg]):
+                        return False # excluded volume error with self, ignoring the neigbour segment for pseudo-lattice-elasticity
+                if list(proposed_change_A) == list(dnastr_B_prop[seg]) or list(proposed_change_B) == list(dnastr_A_prop[seg]):
+                    return False # excluded volume error with other strand
+                if list(proposed_change_A) == list(proposed_change_B):
+                    return False # special case, both DNA segments trying to move into the same place
         return True # only AFTER checking ALL DNA strand sites for a False / failure
     
     def check_strintact(self, dnastr: list, index: int) -> bool:
-        ''' Outputs boolean for if the segment of the proposed change is still adjacent (including diagnols of technically greater length) to its neighbouring segments
+        ''' Outputs boolean for if the segment of the proposed change is still adjacent
         True if DNA chain still intact, False if connection broken
         '''
         adjacent_sites = gen_adj_sites(dnastr, index)
+        adjacent_sites += [list(dnastr[index])] # allow for stored length
         if index == 0: # start segment
             if list(dnastr[index+1]) in adjacent_sites:
                 return True
         elif index == self.lengths - 1: # end segment
             if list(dnastr[index-1]) in adjacent_sites:
                 return True
-        else: # any middle segment
+        elif index > 0 and index < self.lengths - 1: # any middle segment
             if list(dnastr[index-1]) in adjacent_sites and list(dnastr[index+1]) in adjacent_sites:
-                return True
+                    return True
         return False
     
     def check_inbox(self, proposed_change: np.array) -> bool:
@@ -240,7 +244,7 @@ class dna_string_model:
         
     def propose_change(self, dnastr_A_new, dnastr_B_new, index_rand):
     
-        vector_list_zero = vector_list + [np.array([0.0])]
+        vector_list_zero = vector_list + [np.array([0.0, 0.0, 0.0])]
         vector_A_rand = vector_list_zero[np.random.randint(13)] # length of list is 13, indexes 0-12
         vector_B_rand = vector_list_zero[np.random.randint(13)]
 
@@ -292,7 +296,7 @@ class dna_string_model:
         # choose random dna string, segment and vector
         dnastr_rand = np.random.randint(2)
         index_rand = np.random.randint(self.lengths)
-        vector_rand = vector_list[np.random.randint(13)]
+        vector_rand = vector_list[np.random.randint(12)]
         
         # apply random change
         dnastr_chosen = [self.dnastr_A,self.dnastr_B][dnastr_rand]
@@ -343,10 +347,10 @@ class dna_string_model:
         dnastr_A_new, dnastr_B_new = dnastr_A_prop, dnastr_B_prop # proposed change works with simulation rules
         
         # forwards
-        for seg_index in range(random_start_index+1, self.lengths): 
+        for seg_index in range(random_start_index+1, self.lengths+1): 
             dnastr_A_prop, dnastr_B_prop = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose change to seg_index
             # test random change against simulation requirements; intact, no overlap, confinement
-            while not self.check_excvol_gen2(dnastr_A_prop,dnastr_B_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_inbox(dnastr_A_prop[seg_index]) and not self.check_inbox(dnastr_B_prop[random_start_index]):
+            while not self.check_excvol_gen2(dnastr_A_prop,dnastr_B_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_strintact(dnastr_B_prop,seg_index) and not self.check_inbox(dnastr_A_prop[seg_index]) and not self.check_inbox(dnastr_B_prop[random_start_index]):
                     dnastr_A_prop, dnastr_B_prop = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose new change until satisfied
             dnastr_A_new, dnastr_B_new = dnastr_A_prop, dnastr_B_prop # proposed change works with simulation rules
             
@@ -355,11 +359,11 @@ class dna_string_model:
             seg_index = int(seg_index)
             dnastr_A_new, dnastr_B_new = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose change
             # test random change against simulation requirements; intact, no overlap, confinement
-            while not self.check_excvol_gen2(dnastr_A_prop,dnastr_B_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_inbox(dnastr_A_prop[seg_index]) and not self.check_inbox(dnastr_B_prop[random_start_index]):
+            while not self.check_excvol_gen2(dnastr_A_prop,dnastr_B_prop,seg_index) and not self.check_strintact(dnastr_A_prop,seg_index) and not self.check_strintact(dnastr_B_prop,seg_index) and not self.check_inbox(dnastr_A_prop[seg_index]) and not self.check_inbox(dnastr_B_prop[random_start_index]):
                     dnastr_A_prop, dnastr_B_prop = self.propose_change(dnastr_A_new, dnastr_B_new, seg_index) # propose new change until satisfied     
 
         energy_old = self.eng() # * * * UPDATE REQUIRED: can remove to save computational cost * * *
-        energy_new = self.eng_elastic(dnastr_new,dnastr_other) + self.eng_elec(dnastr_new, dnastr_other) + self.entropic_bend()*temp
+        energy_new = self.eng_elastic(dnastr_A_prop, dnastr_B_prop) + self.eng_elec(dnastr_A_prop, dnastr_B_prop) + self.entropic_bend()*temp
         delt_eng = energy_new - energy_old
             # could use the index and its neighbours to calculate the energy change directly
 
@@ -369,7 +373,7 @@ class dna_string_model:
 
         elif delt_eng >= 0:
             random_factor = np.random.random()
-            boltzmann_factor = np.e**(-1*delt_eng/(kb*temp)) # delt_eng in kb units
+            boltzmann_factor = np.e**(-1*delt_eng/(1)) # delt_eng in kb units
             if random_factor < boltzmann_factor: # assign new string change
                 self.dnastr_A, self.dnastr_B = dnastr_A_new, dnastr_B_new
                 self.trajectories.append([self.dnastr_A,self.dnastr_B])
