@@ -99,7 +99,7 @@ class Strand:
         
         self.dnastr = [Bead(start_position)]
         for seg in range(num_segments-1):
-            self.dnastr.append( Bead( start_position+Vector(0,2,0) ) )
+            self.dnastr.append( Bead( self.dnastr[-1].bead.position + Vector(0,2,0) ) )
         
         self.interactivity = []
         
