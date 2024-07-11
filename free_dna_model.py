@@ -1,17 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Jun 21 17:03:37 2024
+Created on Thu Jul 11 13:06:51 2024
 
 @author: 44775 Ralph Holden
 
 MODEL:
     ball & sticks DNA - like polymer
-    balls / particles occupy sites on a lattice, joined up by straight sticks
+    balls / particles joined up by straight sticks
     balls / particles correspond to one correlation length as described in Kornyshev-Leiken theory
         as such, for non homologous DNA, only one consecutive correlation length can have attractive charged double helix interactions
-    ball & stick model has translational freedom, can move & bend, is also pseudo-elastic, allowing motion 'down chain'
-        assuming then, that these twists occur instantaneously with respect to a DNA configuration, so can be accounted for simply as a perturbation of the energy
-    
+   
 CODE & SIMULATION:
     Metropolis algorithm (a Monte Carlo method) used to propagate DNA strands
     Additional requirements for a random move are; excluded volume effects, keeping the strand intact, and keeping inside the simulation box (confined DNA, closed simulation)
@@ -26,6 +24,8 @@ from itertools import combinations
 kb = 1
 temp = 310.15
 
+# # # aux functions # # #
+
 # # # vector class # # #
 # for maths
 class Vector():
@@ -36,6 +36,7 @@ class Vector():
         self.x = i1
         self.y = i2
         self.z = i3
+        self.arr = np.array([self.x,self.y,self.z])
 
     def __add__(self, other):
         '''Use + sign to implement vector addition'''
@@ -76,19 +77,60 @@ class Vector():
     def angle(self, other):
         '''Calculate the angle between 2 vectors using the dot product'''
         return np.arccos(self.dot(other) / (self.norm()*other.norm()))
+    
+    def cartesian_to_spherical(self):
+        """
+        Convert Cartesian coordinates to spherical coordinates.
+        
+        Parameters:
+        x (float): The x-coordinate in Cartesian coordinates.
+        y (float): The y-coordinate in Cartesian coordinates.
+        z (float): The z-coordinate in Cartesian coordinates.
+        
+        Returns:
+        tuple: A tuple containing the spherical coordinates (r, theta, phi).
+        """
+        #r = np.sqrt(x**2 + y**2 + z**2)
+        r = np.linalg.norm([self.x,self.y,self.z])
+        theta = np.arctan2(self.y, self.x)
+        phi = np.arccos(self.z / r)
+        return r, theta, phi
+
+    def spherical_to_cartesian(self, r, theta, phi):
+        """
+        Convert spherical coordinates to Cartesian coordinates.
+        
+        Parameters:
+        r (float or np.ndarray): The radius in spherical coordinates.
+        theta (float or np.ndarray): The azimuthal angle in spherical coordinates (in radians).
+        phi (float or np.ndarray): The polar angle in spherical coordinates (in radians).
+        
+        Returns:
+        tuple: A tuple containing the Cartesian coordinates (x, y, z).
+               If r, theta, and phi are arrays, x, y, and z will also be arrays.
+        """
+        x = r * np.sin(phi) * np.cos(theta)
+        y = r * np.sin(phi) * np.sin(theta)
+        z = r * np.cos(phi)
+        return Vector(x, y, z)
 
 
 # # # bead class # # #
 class Bead: 
     def __init__(self, position: Vector):
         self.position = position
-        self.radius = 1
+        self.radius = 0.5
         
     def overlap(self, other) -> Tuple[bool, float]: 
-        inter_vector = self.position - other.position
+        inter_vector = self.position.arr - other.position.arr
         min_approach = self.radius + other.radius + 0.01 # tolerance to account for rounding errors that could stall the simulation
-        dist = inter_vector.norm()
+        #dist = inter_vector.norm()
+        dist = np.linalg.norm(inter_vector)
         return dist <= min_approach, dist
+    
+    def inter_vector(self, other) -> Tuple[bool, float]: 
+        intervec = other.position.arr - self.position.arr
+        return intervec
     
     
 class Strand:
@@ -99,7 +141,7 @@ class Strand:
         
         self.dnastr = [Bead(start_position)]
         for seg in range(num_segments-1):
-            self.dnastr.append( Bead( self.dnastr[-1].bead.position + Vector(0,2,0) ) )
+            self.dnastr.append( Bead( self.dnastr[-1].position + Vector(0,1,0) ) )
         
         self.interactivity = []
         
@@ -152,11 +194,11 @@ class Strand:
         True if DNA chain still intact (bead contact or overlap), False if connection broken
         '''
         if index == 0: # start segment
-            return self.dnastr[index].overlap(index+1)[0]
+            return self.dnastr[index].overlap(self.dnastr[index+1])[0]
         elif index == self.num_segments - 1: # end segment
-            return self.dnastr[index].overlap(index-1)[0]
+            return self.dnastr[index].overlap(self.dnastr[index-1])[0]
         elif index > 0 and index < self.num_segments - 1: # any middle segment
-            return self.dnastr[index].overlap(index-1)[0] and self.dnastr[index].overlap(index+1)[0]
+            return self.dnastr[index].overlap(self.dnastr[index-1])[0] and self.dnastr[index].overlap(self.dnastr[index+1])[0]
         
     def check_strintact_whole(self):
         for seg_index in range(self.num_segments):
@@ -198,17 +240,20 @@ class Strand:
         pass
     
     # for MC step
-    def calc_arc(self, selfindex: int, otherindex: int, thi: float, theta: float) -> Vector:
+    def calc_arc(self, selfindex: int, otherindex: int, dtheta: float, dphi: float) -> Vector:
         '''
         Gives the displacement of the bead for an MC bend
         Theta and thi must be in radians
         '''
-        dist = (self.dnastr[selfindex].position - self.dnastr[otherindex].position).norm()
-        return self.dnastr[otherindex].position + dist*Vector(np.cos(thi)*np.cos(theta),np.cos(thi)*np.sin(theta),np.sin(thi))
+        inter_vec = self.dnastr[otherindex].position - self.dnastr[selfindex].position
+        r, theta, phi = inter_vec.cartesian_to_spherical()
+        theta, phi = theta + dtheta, phi + dphi 
+        return self.dnastr[selfindex].position + inter_vec.spherical_to_cartesian(r, theta, phi)
         
     def propose_change(self, seg_index: int, forward = True):
         
-        prop_Strand = self.copy()
+        prop_Strand = Strand(self.num_segments, self.start_position)
+        prop_Strand.dnastr = self.dnastr[:] 
         
         rand_thi = np.random.random()*np.pi/6 # at most a 30 degree bend allowed
         rand_theta = np.random.random()*np.pi*2 # all meridians allowed
@@ -255,27 +300,64 @@ class Simulation:
         
     def save_trajectory(self):
         
+        new_trajA = []
         for seg in self.StrandA.dnastr:
-            self.trajectoryA.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
+            new_trajA.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
+        self.trajectoryA.append(new_trajA)
         
+        new_trajB = []
         for seg in self.StrandB.dnastr:
-            self.trajectoryB.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
+            new_trajB.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
+        self.trajectoryB.append(new_trajB)
         
+        
+    def montecarlostep_trial(self):
+        prop_StrandA = self.StrandA.propose_change_whole()
+        prop_StrandB = self.StrandB.propose_change_whole()
+                
+        # find valid configuration, need to wait for entire strand to change before excvol and inbox can fairly be applied
+        while not prop_StrandA.check_excvol(prop_StrandB) or not prop_StrandA.check_inbox(self.boxlims) or not prop_StrandB.check_inbox(self.boxlims) or not prop_StrandA.check_strintact_whole() or  not prop_StrandB.check_strintact_whole():
+           prop_StrandA = self.StrandA.propose_change_whole()
+           prop_StrandB = self.StrandB.propose_change_whole() # try again
+        
+        # calculate deltaE 
+        prev_energy = self.Sim_free_energy 
+        prop_energy = prop_StrandA.free_energy() + prop_StrandB.free_energy()
+        deltaE = prop_energy - prev_energy
+    
+        if deltaE <= 0: # assign new string change, which has already 'passed' conditions from proposal 
+            self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
+            #self.trajectoryA.append(self.StrandA.dnastr)
+            #self.trajectoryB.append(self.StrandB.dnastr)
+            self.save_trajectory()
+            self.Sim_free_energy = prop_energy
+            self.mctime += 0.0 # assign energy, strings and trajectories
+    
+        elif deltaE >= 0:
+            random_factor = np.random.random()
+            boltzmann_factor = np.e**(-1*deltaE/(1)) # delt_eng in kb units
+            if random_factor < boltzmann_factor: # assign new string change
+                self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
+                #self.trajectoryA.append(self.StrandA.dnastr)
+                #self.trajectoryB.append(self.StrandB.dnastr)
+                self.save_trajectory()
+                self.Sim_free_energy = prop_energy 
+                self.mctime += 0.0 # assign energy, strings and trajectories
+                    
+        self.nsteps += 1
         
     def montecarlostep(self):
         prop_StrandA = self.StrandA.propose_change_whole()
         prop_StrandB = self.StrandB.propose_change_whole()
                 
-        # find valid configuration, need to wait for entire strand to change before excvol and inbox can fairly be applied
-        if not prop_StrandA.check_excvol(prop_StrandB) or not prop_StrandA.inbox(self.boxlims) or not prop_StrandB.inbox(self.boxlims) or not prop_StrandA.check_strintact_whole() or  not prop_StrandB.check_strintact_whole():
-        #   prop_StrandA = self.StrandA.propose_change_whole()
-        #   prop_StrandB = self.StrandB.propose_change_whole() # try again
+        # test for valid configuration
+        if prop_StrandA.check_excvol(prop_StrandB) and prop_StrandA.check_inbox(self.boxlims) and prop_StrandB.check_inbox(self.boxlims) and prop_StrandA.check_strintact_whole() and prop_StrandB.check_strintact_whole():
         
-        # calculate deltaE 
+            # calculate deltaE 
             prev_energy = self.Sim_free_energy 
             prop_energy = prop_StrandA.free_energy() + prop_StrandB.free_energy()
             deltaE = prop_energy - prev_energy
-    
+        
             if deltaE <= 0: # assign new string change, which has already 'passed' conditions from proposal 
                 self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
                 #self.trajectoryA.append(self.StrandA.dnastr)
@@ -283,7 +365,7 @@ class Simulation:
                 self.save_trajectory()
                 self.Sim_free_energy = prop_energy
                 self.mctime += 0.0 # assign energy, strings and trajectories
-    
+        
             elif deltaE >= 0:
                 random_factor = np.random.random()
                 boltzmann_factor = np.e**(-1*deltaE/(1)) # delt_eng in kb units
@@ -294,5 +376,5 @@ class Simulation:
                     self.save_trajectory()
                     self.Sim_free_energy = prop_energy 
                     self.mctime += 0.0 # assign energy, strings and trajectories
-                    
+                        
             self.nsteps += 1
