@@ -17,7 +17,6 @@ CODE & SIMULATION:
 # # # IMPORTS # # #
 import numpy as np
 from typing import Tuple
-#import matplotlib.pyplot as plt
 from itertools import combinations
 
 # # # UNITS # # #
@@ -132,16 +131,24 @@ class Bead:
         intervec = other.position.arr - self.position.arr
         return intervec
     
+    def copy(self):
+        return Bead(Vector(self.position.x,self.position.y,self.position.z))
+    
     
 class Strand:
-    def __init__(self, num_segments: int, start_position: Vector):
+    def __init__(self, num_segments: int, start_position: Vector, initial = True, prev_dnastr = None):
         
         self.num_segments = num_segments
         self.start_position = start_position
         
-        self.dnastr = [Bead(start_position)]
-        for seg in range(num_segments-1):
-            self.dnastr.append( Bead( self.dnastr[-1].position + Vector(0,1,0) ) )
+        if initial:
+            self.dnastr = [Bead(start_position)]
+            for seg in range(num_segments-1):
+                self.dnastr.append( Bead( self.dnastr[-1].position + Vector(0,1,0) ) )
+        elif not initial:
+            self.dnastr = [prev_dnastr[0].copy()]
+            for seg in prev_dnastr[1:]:
+                self.dnastr.append( Bead( Vector(seg.position.x,seg.position.y,seg.position.z)))
         
         self.interactivity = []
         
@@ -149,9 +156,9 @@ class Strand:
         
     def copy(self):
         '''Create a new object which is a copy of the current.'''
-        Strandnew = Strand(self.num_segments, self.start_position)
-        Strandnew.dnastr = self.dnastr # make sure new DNA strand is up to date
-        return Strandnew
+        #Strandnew = Strand(self.num_segments, self.start_position)
+        # Strandnew.dnastr = self.dnastr # make sure new DNA strand is up to date
+        return (Strand(self.num_segments, self.start_position, initial = False, prev_dnastr = self.dnastr)) #Strandnew
     
     def count_adj_same(self, index: int) -> int:
         '''
@@ -227,8 +234,17 @@ class Strand:
     def eng_elec(self):
         return -0.0
     
-    def eng_elastic(self):
-        return -0.0
+    def eng_elastic_pb(self, seg_index: int) -> float:
+        vec1 = self.dnastr[seg_index-1].position - self.dnastr[seg_index].position
+        vec2 = self.dnastr[seg_index+1].position - self.dnastr[seg_index].position
+        return 1000*(1 - np.cos(vec1.angle(vec2))**2) # completely arbitrary! 
+    
+    def eng_elastic(self) -> float:
+        '''Energy term for bending of DNA strand from straight'''
+        energy = 0
+        for seg_index in range(1,self.num_segments-1):
+            energy += self.eng_elastic_pb(seg_index)
+        return energy
     
     def entropic_bend(self):
         return 0.0
@@ -250,34 +266,82 @@ class Strand:
         theta, phi = theta + dtheta, phi + dphi 
         return self.dnastr[selfindex].position + inter_vec.spherical_to_cartesian(r, theta, phi)
         
-    def propose_change(self, seg_index: int, forward = True):
+    
+    def propose_change(self, seg_index: int, rand1, rand2, forward = True):
         
-        prop_Strand = Strand(self.num_segments, self.start_position)
-        prop_Strand.dnastr = self.dnastr[:] 
+        #prop_Strand = Strand(self.num_segments, self.start_position)
+        #prop_Strand.dnastr = self.dnastr[:] 
+        prop_Strand = self.copy()
+        #prop_Strand.dnastr = self.dnastr
         
-        rand_thi = np.random.random()*np.pi/6 # at most a 30 degree bend allowed
-        rand_theta = np.random.random()*np.pi*2 # all meridians allowed
+        #rand_theta = np.random.random()*np.pi/360
+        #rand_phi = np.random.random()*np.pi/360 # at most a 0.5 degree bend allowed
+        rand_theta = rand1*np.pi/360/2
+        rand_phi = rand2*np.pi/360/2
         # shift every subsequent bead, NOTE: not applicable for final bead
         if forward:
-            for nextseg in range(seg_index+1, self.num_segments-1): # bends down one direction of chain
-                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_index, nextseg, rand_thi, rand_theta)
+            for nextseg in range(seg_index+1, self.num_segments): # bends down one direction of chain
+                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_index, nextseg, rand_theta, rand_phi)
         elif not forward:
-            for nextseg in range(seg_index-1, 0, -1):
-                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_index, nextseg, rand_thi, rand_theta)
+            for nextseg in range(seg_index-1, -1, -1):
+                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_index, nextseg, rand_theta, rand_phi)
         return prop_Strand
     
-    def propose_change_whole(self):
+    
+    def propose_change_whole(self, random_start_index: int):
         # random initial segment in middle 3/5 of DNA strand
-        random_start_index = np.random.randint(int(self.num_segments/5),int(4*self.num_segments/5))
+        #random_start_index = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
         # in current model, do not need to propose a change to the starting segment
         # make copy for first time, then after, update that
         # going forwards, updating entire rest of strand each time
-        prop_Strand = self.propose_change(random_start_index, forward = True) # first bend
+        prop_Strand = self.propose_change(random_start_index, np.random.random(), np.random.random(), forward = True) # first bend
         for seg_index in range(random_start_index+1, self.num_segments-1): # again, final bead cannot bend a further
-            prop_Strand = prop_Strand.propose_change(seg_index, forward = True)
-        for seg_index in range(random_start_index+1, self.num_segments-1): # again, final bead cannot bend a further
-            prop_Strand = prop_Strand.propose_change(seg_index, forward = True)
+            prop_Strand = prop_Strand.propose_change(seg_index, np.random.random(), np.random.random(), forward = True)
+        for seg_index in range(random_start_index+1, 0, -1): # again, final bead cannot bend a further
+            prop_Strand = prop_Strand.propose_change(seg_index, np.random.random(), np.random.random(), forward = False)
         return prop_Strand
+    
+    
+    def propose_change_both(self, seg_indexA: int, seg_indexB: int, forward = True):
+        
+        prop_Strand = self.copy()
+        
+        rand_thetaA = np.random.random()*np.pi/720
+        rand_phiA = np.random.random()*np.pi/720
+        rand_thetaB = np.random.random()*np.pi/720
+        rand_phiB = np.random.random()*np.pi/720 # at most a 0.25 degree bend allowed
+        # shift every subsequent bead, NOTE: not applicable for final bead
+        if forward:
+            for nextseg in range(seg_indexA+1, self.num_segments): # bends down one direction of chain
+                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_indexA, nextseg, rand_thetaA, rand_phiA)
+            for nextseg in range(seg_indexB+1, self.num_segments): # bends down one direction of chain
+                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_indexB, nextseg, rand_thetaB, rand_phiB)
+        elif not forward:
+            for nextseg in range(seg_indexA-1, -1, -1):
+                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_indexA, nextseg, rand_thetaA, rand_phiA)
+            for nextseg in range(seg_indexB-1, -1, -1):
+                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_indexB, nextseg, rand_thetaB, rand_phiB)
+        return prop_Strand
+    
+    
+    def propose_change_both_whole(self):
+        # random initial segment in middle 3/5 of DNA strand
+        random_start_indexA = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
+        random_start_indexB = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
+        # in current model, do not need to propose a change to the starting segmentrandom_start_indexA = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
+        # make copy for first time, then after, update that
+        # going forwards, updating entire rest of strand each time
+        prop_StrandA = self.propose_change(random_start_indexA, forward = True) # first bend
+        prop_StrandB = self.propose_change(random_start_indexB, forward = True) # first bend
+        for seg_index in range(random_start_indexA+1, self.num_segments-1): # again, final bead cannot bend a further
+            prop_StrandA = prop_StrandA.propose_change(seg_index, forward = True)
+        for seg_index in range(random_start_indexB+1, self.num_segments-1): # again, final bead cannot bend a further
+            prop_StrandB = prop_StrandB.propose_change(seg_index, forward = True)
+        for seg_index in range(random_start_indexA+1, 0, -1): # again, final bead cannot bend a further
+            prop_StrandA = prop_StrandA.propose_change(seg_index, forward = False)
+        for seg_index in range(random_start_indexB+1, 0, -1): # again, final bead cannot bend a further
+            prop_StrandB = prop_StrandB.propose_change(seg_index, forward = False)
+        return prop_StrandA, prop_StrandB
         
     
 class Simulation:
@@ -312,13 +376,15 @@ class Simulation:
         
         
     def montecarlostep_trial(self):
-        prop_StrandA = self.StrandA.propose_change_whole()
-        prop_StrandB = self.StrandB.propose_change_whole()
+        #prop_StrandA, prop_StrandB = self.StrandA.propose_change_both_whole()
+        prop_StrandA = self.StrandA.propose_change_whole(random_start_index = np.random.randint(int(self.StrandA.num_segments/10),int(9*self.StrandA.num_segments/10)))
+        prop_StrandB = self.StrandB.propose_change_whole(random_start_index = np.random.randint(int(self.StrandB.num_segments/10),int(9*self.StrandB.num_segments/10)))
                 
         # find valid configuration, need to wait for entire strand to change before excvol and inbox can fairly be applied
         while not prop_StrandA.check_excvol(prop_StrandB) or not prop_StrandA.check_inbox(self.boxlims) or not prop_StrandB.check_inbox(self.boxlims) or not prop_StrandA.check_strintact_whole() or  not prop_StrandB.check_strintact_whole():
-           prop_StrandA = self.StrandA.propose_change_whole()
-           prop_StrandB = self.StrandB.propose_change_whole() # try again
+           #prop_StrandA, prop_StrandB = self.StrandA.propose_change_both_whole()
+           prop_StrandA = self.StrandA.propose_change_whole(np.random.randint(int(self.StrandA.num_segments/10),int(9*self.StrandA.num_segments/10)))
+           prop_StrandB = self.StrandB.propose_change_whole(np.random.randint(int(self.StrandB.num_segments/10),int(9*self.StrandB.num_segments/10)))
         
         # calculate deltaE 
         prev_energy = self.Sim_free_energy 
