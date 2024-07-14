@@ -237,7 +237,7 @@ class Strand:
     def eng_elastic_pb(self, seg_index: int) -> float:
         vec1 = self.dnastr[seg_index-1].position - self.dnastr[seg_index].position
         vec2 = self.dnastr[seg_index+1].position - self.dnastr[seg_index].position
-        return 1000*(1 - np.cos(vec1.angle(vec2))**2) # completely arbitrary! 
+        return 10*(1 - np.cos(vec1.angle(vec2))**2) # completely arbitrary! 
     
     def eng_elastic(self) -> float:
         '''Energy term for bending of DNA strand from straight'''
@@ -276,8 +276,8 @@ class Strand:
         
         #rand_theta = np.random.random()*np.pi/360
         #rand_phi = np.random.random()*np.pi/360 # at most a 0.5 degree bend allowed
-        rand_theta = rand1*np.pi/360/2
-        rand_phi = rand2*np.pi/360/2
+        rand_theta = rand1*np.pi/360/2 * [-1,1][np.random.randint(2)]
+        rand_phi = rand2*np.pi/360/2   * [-1,1][np.random.randint(2)]
         # shift every subsequent bead, NOTE: not applicable for final bead
         if forward:
             for nextseg in range(seg_index+1, self.num_segments): # bends down one direction of chain
@@ -306,10 +306,11 @@ class Strand:
         
         prop_Strand = self.copy()
         
-        rand_thetaA = np.random.random()*np.pi/720
-        rand_phiA = np.random.random()*np.pi/720
-        rand_thetaB = np.random.random()*np.pi/720
-        rand_phiB = np.random.random()*np.pi/720 # at most a 0.25 degree bend allowed
+        rand_thetaA = np.random.random()*np.pi/720 * [-1,1][np.random.randint(2)]
+        rand_phiA = np.random.random()*np.pi/720   * [-1,1][np.random.randint(2)]
+        rand_thetaB = np.random.random()*np.pi/720 * [-1,1][np.random.randint(2)]
+        rand_phiB = np.random.random()*np.pi/720   * [-1,1][np.random.randint(2)]
+        # at most a 0.25 degree bend allowed
         # shift every subsequent bead, NOTE: not applicable for final bead
         if forward:
             for nextseg in range(seg_indexA+1, self.num_segments): # bends down one direction of chain
