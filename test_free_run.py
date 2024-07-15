@@ -7,6 +7,7 @@ Created on Sat Jul 11 13:06:51 2024
 """
 # # # IMPORTS # # #
 from free_dna_model import Vector, Bead, Strand, Simulation, np, Tuple, combinations
+from free_dna_model import kb, temp, kappab, lp
 import pickle
 import sys
 import logging
@@ -18,21 +19,23 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 1000
+nsteps = 2000
 # Length of Segments
-nsegs = 30
+nsegs = 90
 ystart = -nsegs/2
 # Separation (along x axis)
-sep = 10
+sep = 5
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 20, 20, 20 # from -lim to +lim 
+xlim, ylim, zlim = 20, 50, 20 # from -lim to +lim 
 
+# # # DATA OUTPUT PARAMETERS # # #
 # save data?
 save_data = False
-log_update = 50 # how often to publish values to the log file
+log_update = 100 # how often to publish values to the log file
 # animation?
-animate = False
+animate = True
+frame_hop = 50 # frame dump frequency
 
 # # # INITIALISE & RUN SIMULATION # # #
 sim = Simulation(boxlims=Vector(xlim,ylim,zlim), StrandA=Strand(nsegs,Vector(xstartA,ystart,0)), StrandB=Strand(nsegs,Vector(xstartB,ystart,0)))
@@ -119,7 +122,8 @@ if animate:
     tB = sim.trajectoryB
     
     # Number of frames for the animation
-    num_frames = len(tA)
+    selected_frames = range(0,len(tA),frame_hop)
+    num_frames = len(selected_frames)
     
     # Create a figure and a 3D axis
     fig = plt.figure()
@@ -127,8 +131,8 @@ if animate:
     
     # Precomputed data (replace these lists with your actual data)
     # Each element in the list should be a tuple (x, y, z)
-    data1 = [(tA[i][:, 0], tA[i][:, 1], tA[i][:, 2]) for i in range(num_frames)]
-    data2 = [(tB[i][:, 0], tB[i][:, 1], tB[i][:, 2]) for i in range(num_frames)]
+    data1 = [(tA[i][:, 0], tA[i][:, 1], tA[i][:, 2]) for i in selected_frames]
+    data2 = [(tB[i][:, 0], tB[i][:, 1], tB[i][:, 2]) for i in selected_frames]
     
     # Initial data
     x1, y1, z1 = data1[0]
