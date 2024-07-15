@@ -23,6 +23,11 @@ from itertools import combinations
 kb = 1
 temp = 310.15
 
+# PARAMS
+lp = 4.5 # persistence length, in correlation length diameter grains of 100 Angstroms
+kappab = lp * kb * temp # bending stiffness
+
+
 # # # aux functions # # #
 
 # # # vector class # # #
@@ -136,6 +141,7 @@ class Bead:
     
     
 class Strand:
+    
     def __init__(self, num_segments: int, start_position: Vector, initial = True, prev_dnastr = None):
         
         self.num_segments = num_segments
@@ -175,13 +181,12 @@ class Strand:
         '''
         For an index, counts number of paired segments with the other DNA strand.
         For single specified segment only.
-        Considering ONLY CLOSEST adjacent sites.
         '''
         count = 0 
         for seg in other.dnastr:
             if self.dnastr[selfindex].overlap(seg)[0]:
                 count += 1 
-        return count        
+        return count
     
     # CHECKS for valid move
     def check_excvol(self, other) -> bool:
@@ -225,25 +230,97 @@ class Strand:
         return True 
     
     # for energies
-    def interactivity_condition(self):
-        pass
-    
-    def interactivity(self):
-        pass
+    def condition_interactivity(self, other, fororbac: int, first: bool, seg_index: int, num = 3) -> Tuple[int]:
+        '''Defines an interaction as attractive (-1) if it is 'standalone', otherwise repulsive (1) or no interaction (0)
+        '''
+        if first:
+            if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num:
+                return [-1]
+            else:
+                return [0]
+        if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) == 0:
+            return [-1]
+        elif self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) != 0: 
+            return [abs(self.interactivity[seg_index+fororbac])+1] # more repulsive than previous by kbT
+        else:
+            return [0]
+        
+    def gen_interactivity(self, other) -> list:
+        '''Prioritises sticking to middle (first assigned hence without dependance on +- 1)
+        Chooses random index in middle to start on
+        NOTE 1: If segment occupies same lattice site as previous (stored length) the second interaction is repulsive (beyond correlation length)
+        NOTE 2: As adjacent sites ONLY are counted, stored lengths will not cause issues for interactivity count
+
+        * * * UPDATE REQUIRED: make successive replusions greater in magnitude * * *
+        '''
+        # starter
+        random_start_index = np.random.randint(int(self.lengths/10),int(9*self.lengths/5))
+        self.interactivity = self.condition_interactivity(other, 0, True, random_start_index, 3)
+        
+        # forwards
+        for seg_index in range(random_start_index+1,self.num_segments-1): # from index+1 to penultimate
+            self.interactivity += self.condition_interactivity(other, -1, False, seg_index, 3)
+            
+        # end (from forwards)
+        self.interactivity += self.condition_interactivity(other, -1, False, -1, 2)
+        
+        # backwards
+        for seg_index in np.linspace(random_start_index-1, 1, random_start_index-1): # from index-1 to second index
+            self.interactivity = self.condition_interactivity(other, +1, False, seg_index, 3) + self.interactivity
+            
+        # end (from backwards)
+        self.interactivity = self.condition_interactivity(other, +1, False, 0, 2) + self.interactivity
     
     def eng_elec(self):
-        return -0.0
+        return np.sum(self.interactivity)
+
+    def find_angle(self, seg_index):
+        # Points p1, p2, and p3 are arrays or tuples of the form [x, y]
+        p1 = self.dnastr[seg_index-1].position.arr
+        p2 = self.dnastr[seg_index].position.arr
+        p3 = self.dnastr[seg_index+1].position.arr
+        
+        # Check if the points are collinear by calculating the area of the triangle formed by the points
+        # If the area is zero, the points are collinear
+        if np.isclose(np.linalg.det(np.array([p1 - p3, p2 - p3, p3 - p3])),0):
+            return 0, 1, 1 # will give 0 angular energy
+        
+        mid1 = (p1 + p2) / 2
+        mid2 = (p2 + p3) / 2
+        
+        # Vectors
+        vec1 = p2 - p1
+        vec2 = p3 - p2
     
-    def eng_elastic_pb(self, seg_index: int) -> float:
-        vec1 = self.dnastr[seg_index-1].position - self.dnastr[seg_index].position
-        vec2 = self.dnastr[seg_index+1].position - self.dnastr[seg_index].position
-        return 10*(1 - np.cos(vec1.angle(vec2))**2) # completely arbitrary! 
+        # Perpendicular vectors in the plane formed by the points
+        perp1 = np.cross(vec1, np.array([1, 0, 0]) if np.abs(vec1[0]) < np.abs(vec1[1]) else np.array([0, 1, 0]))
+        perp1 /= np.linalg.norm(perp1)
+    
+        perp2 = np.cross(vec2, np.array([1, 0, 0]) if np.abs(vec2[0]) < np.abs(vec2[1]) else np.array([0, 1, 0]))
+        perp2 /= np.linalg.norm(perp2)
+    
+        # Solve the plane equations for the intersection
+        A = np.array([perp1, -perp2]).T
+        B = np.array([np.dot(perp1, mid1), np.dot(perp2, mid2)])
+        
+        centre = np.linalg.solve(A, B)
+        
+        s = np.linalg.norm(p1 - p3)
+        r = np.linalg.norm(p1 - centre) # radius of circle
+        
+        angle = 2*np.pi*r / s # fraction of circle circumference is angle in rad
+        
+        return angle, s, r
     
     def eng_elastic(self) -> float:
-        '''Energy term for bending of DNA strand from straight'''
+        '''
+        Energy term for bending of DNA strand from straight
+        Uses small angle approx so finer coarse graining more accurate
+        '''
         energy = 0
         for seg_index in range(1,self.num_segments-1):
-            energy += self.eng_elastic_pb(seg_index)
+            angle, s, r = self.find_angle(seg_index)
+            energy += kappab / (2*s) *  angle**2
         return energy
     
     def entropic_bend(self):
@@ -269,15 +346,10 @@ class Strand:
     
     def propose_change(self, seg_index: int, rand1, rand2, forward = True):
         
-        #prop_Strand = Strand(self.num_segments, self.start_position)
-        #prop_Strand.dnastr = self.dnastr[:] 
         prop_Strand = self.copy()
-        #prop_Strand.dnastr = self.dnastr
         
-        #rand_theta = np.random.random()*np.pi/360
-        #rand_phi = np.random.random()*np.pi/360 # at most a 0.5 degree bend allowed
         rand_theta = rand1*np.pi/360/2 * [-1,1][np.random.randint(2)]
-        rand_phi = rand2*np.pi/360/2   * [-1,1][np.random.randint(2)]
+        rand_phi = rand2*np.pi/360  /2 * [-1,1][np.random.randint(2)]
         # shift every subsequent bead, NOTE: not applicable for final bead
         if forward:
             for nextseg in range(seg_index+1, self.num_segments): # bends down one direction of chain
@@ -326,6 +398,7 @@ class Strand:
     
     
     def propose_change_both_whole(self):
+        '''Doesnt work! Dont use'''
         # random initial segment in middle 3/5 of DNA strand
         random_start_indexA = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
         random_start_indexB = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
@@ -343,11 +416,10 @@ class Strand:
         for seg_index in range(random_start_indexB+1, 0, -1): # again, final bead cannot bend a further
             prop_StrandB = prop_StrandB.propose_change(seg_index, forward = False)
         return prop_StrandA, prop_StrandB
-        
     
 class Simulation:
     
-    nsteps = 0
+    nsteps = 1
     mctime = 0.0
     
     def __init__(self, boxlims: Vector, StrandA: Strand, StrandB: Strand):
@@ -356,24 +428,16 @@ class Simulation:
         self.StrandA = StrandA
         self.StrandB = StrandB
         
-        self.Sim_free_energy = self.StrandA.free_energy() + self.StrandB.free_energy()
+        self.free_energy = self.StrandA.free_energy() + self.StrandB.free_energy()
     
         self.trajectoryA = []
         self.trajectoryB = []
+        self.pair_count = []
+        self.fe_traj = []
         self.save_trajectory()
         
         
-    def save_trajectory(self):
-        
-        new_trajA = []
-        for seg in self.StrandA.dnastr:
-            new_trajA.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
-        self.trajectoryA.append(new_trajA)
-        
-        new_trajB = []
-        for seg in self.StrandB.dnastr:
-            new_trajB.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
-        self.trajectoryB.append(new_trajB)
+
         
         
     def montecarlostep_trial(self):
@@ -388,16 +452,13 @@ class Simulation:
            prop_StrandB = self.StrandB.propose_change_whole(np.random.randint(int(self.StrandB.num_segments/10),int(9*self.StrandB.num_segments/10)))
         
         # calculate deltaE 
-        prev_energy = self.Sim_free_energy 
+        prev_energy = self.free_energy 
         prop_energy = prop_StrandA.free_energy() + prop_StrandB.free_energy()
         deltaE = prop_energy - prev_energy
     
         if deltaE <= 0: # assign new string change, which has already 'passed' conditions from proposal 
             self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
-            #self.trajectoryA.append(self.StrandA.dnastr)
-            #self.trajectoryB.append(self.StrandB.dnastr)
-            self.save_trajectory()
-            self.Sim_free_energy = prop_energy
+            self.free_energy = prop_energy
             self.mctime += 0.0 # assign energy, strings and trajectories
     
         elif deltaE >= 0:
@@ -405,13 +466,11 @@ class Simulation:
             boltzmann_factor = np.e**(-1*deltaE/(1)) # delt_eng in kb units
             if random_factor < boltzmann_factor: # assign new string change
                 self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
-                #self.trajectoryA.append(self.StrandA.dnastr)
-                #self.trajectoryB.append(self.StrandB.dnastr)
-                self.save_trajectory()
-                self.Sim_free_energy = prop_energy 
+                self.free_energy = prop_energy 
                 self.mctime += 0.0 # assign energy, strings and trajectories
                     
         self.nsteps += 1
+        self.save_trajectory()
         
     def montecarlostep(self):
         prop_StrandA = self.StrandA.propose_change_whole()
@@ -421,7 +480,7 @@ class Simulation:
         if prop_StrandA.check_excvol(prop_StrandB) and prop_StrandA.check_inbox(self.boxlims) and prop_StrandB.check_inbox(self.boxlims) and prop_StrandA.check_strintact_whole() and prop_StrandB.check_strintact_whole():
         
             # calculate deltaE 
-            prev_energy = self.Sim_free_energy 
+            prev_energy = self.free_energy 
             prop_energy = prop_StrandA.free_energy() + prop_StrandB.free_energy()
             deltaE = prop_energy - prev_energy
         
@@ -430,18 +489,54 @@ class Simulation:
                 #self.trajectoryA.append(self.StrandA.dnastr)
                 #self.trajectoryB.append(self.StrandB.dnastr)
                 self.save_trajectory()
-                self.Sim_free_energy = prop_energy
+                self.free_energy = prop_energy
                 self.mctime += 0.0 # assign energy, strings and trajectories
         
             elif deltaE >= 0:
                 random_factor = np.random.random()
-                boltzmann_factor = np.e**(-1*deltaE/(1)) # delt_eng in kb units
+                boltzmann_factor = np.e**(-1*deltaE/(temp)) # delt_eng in kb units
                 if random_factor < boltzmann_factor: # assign new string change
                     self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
                     #self.trajectoryA.append(self.StrandA.dnastr)
                     #self.trajectoryB.append(self.StrandB.dnastr)
                     self.save_trajectory()
-                    self.Sim_free_energy = prop_energy 
+                    self.free_energy = prop_energy 
                     self.mctime += 0.0 # assign energy, strings and trajectories
                         
             self.nsteps += 1
+            
+    # for data analysis
+    def save_trajectory(self):
+        
+        new_trajA = []
+        for seg in self.StrandA.dnastr:
+            new_trajA.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
+        self.trajectoryA.append(new_trajA)
+        
+        new_trajB = []
+        for seg in self.StrandB.dnastr:
+            new_trajB.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
+        self.trajectoryB.append(new_trajB)
+        
+        self.fe_traj.append(self.free_energy)
+    
+    def endtoend(self, tindex):
+        endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1])
+        endtoendB = np.linalg.norm(self.trajectoryB[tindex][0] - self.trajectoryB[tindex][-1])
+        return endtoendA, endtoendB
+    
+    def count_tot(self, other):
+        '''Discounts immediate neighbours from pairs'''
+        pass
+        #self.paired_count = 0
+        #if self.count_adj_same(0) >= 2:
+        #    self.paired_count += 1
+        #if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) == 0:
+        #    return [-1]
+        #elif self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) != 0: 
+        #    return [abs(self.interactivity[seg_index+fororbac])+1] # more repulsive than previous by kbT
+        #else:
+        #    return [0]
+    
+    def statistics(self):
+        pass
