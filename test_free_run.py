@@ -6,13 +6,13 @@ Created on Sat Jul 11 13:06:51 2024
 """
 # # # IMPORTS # # #
 from free_dna_model import Vector, Bead, Strand, Simulation, np, Tuple, combinations
-#from free_dna_model import kb, temp, kappab, lp
+from free_dna_model import kb, temp, kappab, lp
 import pickle
 import sys
 import logging
 from datetime import datetime
 import matplotlib.pyplot as plt
-#from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation, PillowWriter
 
 
@@ -23,14 +23,14 @@ nsteps = 5000
 nsegs = 5 * 30
 ystart = -nsegs/5/2
 # Separation (along x axis)
-sep = 5
+sep = 1
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
 xlim, ylim, zlim = 20, 20, 20 # from -lim to +lim 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
-save_data = False
+save_data = True
 log_update = 100 # how often to publish values to the log file
 # animation?
 animate = True
@@ -61,11 +61,11 @@ for i, item in enumerate(range(nsteps)):
         logging.info(f'''Step {i} : DATA:
 Strand A end to end = {endtoendA} lc
 Strand B end to end = {endtoendB} lc
-Simulation Total Energy = {sim.free_energy} kbT
+Simulation Total Energy = {sim.energy} kbT
 ...''')
         print(f'''\rStrand A end to end = {endtoendA} lc
 Strand B end to end = {endtoendB} lc
-Simulation Total Energy = {sim.free_energy} kbT
+Simulation Total Energy = {sim.energy} kbT
 ...''')
     
 # save trajectories
@@ -99,21 +99,21 @@ plt.plot(xsteps, endtoendA, label = 'Strand A')
 plt.plot(xsteps, endtoendB, label = 'Strand B')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
-plt.savefig('endtoend.png')
+plt.savefig('./Data_outputs/endtoend.png')
 plt.show()
 
 # plotting total free energy
 print()
-print(f'Free Energy = {sim.free_energy} kbT')
+print(f'Free Energy = {sim.energy} kbT')
 
 plt.figure()
 plt.title('Coarse Grain DNA Free Energy')
 plt.xlabel('Monte Carlo Step')
 plt.ylabel('Free Energy, $k_bT$')
-plt.plot(xsteps, sim.fe_traj, label='')
+plt.plot(xsteps, sim.eng_traj, label='')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
-plt.savefig('energy.png')
+plt.savefig('./Data_outputs/energy.png')
 plt.show()
     
 # # # ANIMATION # # #
