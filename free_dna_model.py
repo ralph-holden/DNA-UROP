@@ -29,8 +29,8 @@ kappab = lp * kb * temp # bending stiffness
 
 
 # # # aux functions # # #
-x = np.linspace(0,4,int(4/0.2))
-nonhomolfunc = (x-1)**2 - 1
+x = np.linspace(0,1000,int(1000/0.2)+1)
+nonhomolfunc = np.concatenate((-x[x <= 1.0],2*(x-1.5)[x > 1])) #zero@start, -1 kbT @ 1 lc, +1 kbT @ 2lc, & so on
 #homolrecfunc = 
 
 # # # vector class # # #
@@ -174,8 +174,8 @@ class Strand:
         Considering ALL adjacent sites, otherwise count does not work.
         '''
         count = 0 # does not include required neighbours or oneself
-        for seg in self.dnastr:
-            if self.dnastr[index].overlap(seg)[0]:
+        for b in self.dnastr:
+            if self.dnastr[index].overlap(b)[0]:
                 count += 1
         return count
     
@@ -185,8 +185,8 @@ class Strand:
         For single specified segment only.
         '''
         count = 0 
-        for seg in other.dnastr:
-            if self.dnastr[selfindex].overlap(seg)[0]:
+        for b in other.dnastr:
+            if self.dnastr[selfindex].overlap(b)[0]:
                 count += 1 
         return count
     
@@ -198,7 +198,7 @@ class Strand:
         NOTE: in first generation montecarlostep(), the segment HAS to move and therefore coincide with any of the previous / OLD strand
         '''
         for segA, segB in combinations(self.dnastr+other.dnastr,2):
-            if segA.overlap(segB)[1] < segA.radius: # when overlap is TOO great, defined as the centre of one overlapping with other, so still allows some overlap to register interactions
+            if segA.overlap(segB)[1] <= segA.radius: # when overlap is TOO great, defined as the centre of one overlapping with other, so still allows some overlap to register interactions
                 return False
         return True
     
@@ -237,14 +237,12 @@ class Strand:
         '''Defines an interaction as attractive (-1) if it is 'standalone', otherwise repulsive (1) or no interaction (0)
         '''
         if first:
-            if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num:
-                return [1]
-            else:
-                return [0]
-        if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) == 0:
+            return [1] if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) > num else [0]
+
+        if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) > num and abs(self.interactivity[fororbac]) == 0:
             return [1]
-        elif self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) != 0: 
-            return [abs(self.interactivity[seg_index+fororbac])+1] # more repulsive than previous by kbT
+        elif self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) > num and abs(self.interactivity[fororbac]) != 0: 
+            return [abs(self.interactivity[fororbac])+1] # more repulsive than previous by kbT
         else:
             return [0]
         
@@ -257,7 +255,7 @@ class Strand:
         * * * UPDATE REQUIRED: make successive replusions greater in magnitude * * *
         '''
         # starter
-        random_start_index = np.random.randint(int(self.lengths/10),int(9*self.lengths/5))
+        random_start_index = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
         self.interactivity = self.condition_interactivity(other, 0, True, random_start_index, 3)
         
         # forwards
@@ -269,18 +267,26 @@ class Strand:
         
         # backwards
         for seg_index in np.linspace(random_start_index-1, 1, random_start_index-1): # from index-1 to second index
-            self.interactivity = self.condition_interactivity(other, +1, False, seg_index, 3) + self.interactivity
+            self.interactivity = self.condition_interactivity(other, 0, False, int(seg_index), 3) + self.interactivity
             
         # end (from backwards)
-        self.interactivity = self.condition_interactivity(other, +1, False, 0, 2) + self.interactivity
+        self.interactivity = self.condition_interactivity(other, 0, False, 0, 2) + self.interactivity
     
-    def eng_elec(self):
+    def eng_elec(self, other):
         energy, eng_bit = 0, 0
+        self.gen_interactivity(other)
         for i in self.interactivity: # interactivity gives INDEX of segment on non homologous interaction function
             eng_bit = nonhomolfunc[i] if i != 0 else eng_bit # updates the energy of the paired sequence, overwrites previous
             energy += eng_bit if i == 0 else 0 # when paired sequence ends submit energy of part, if not paired OR sequence 'unfinished' submits 0
             eng_bit = 0 if i == 0 else eng_bit # resets eng_bit at the end of non interacting part
         energy += eng_bit # for case that final segment is paired
+        other.gen_interactivity(self)
+        eng_bit = 0
+        for i in other.interactivity: 
+            eng_bit = nonhomolfunc[i] if i != 0 else eng_bit 
+            energy += eng_bit if i == 0 else 0 
+            eng_bit = 0 if i == 0 else eng_bit 
+        energy += eng_bit 
         return energy
 
     def find_angle(self, seg_index):
@@ -331,15 +337,6 @@ class Strand:
             energy += kappab / (2*s) *  angle**2
         return energy
     
-    def entropic_bend(self):
-        return 0.0
-    
-    def free_energy(self):
-        return self.eng_elec() + self.eng_elastic() + temp*self.entropic_bend()
-    
-    def statistics(self):
-        pass
-    
     # for MC step
     def calc_arc(self, selfindex: int, otherindex: int, dtheta: float, dphi: float) -> Vector:
         '''
@@ -356,8 +353,8 @@ class Strand:
         
         prop_Strand = self.copy()
         
-        rand_theta = rand1*np.pi/360/2 * [-1,1][np.random.randint(2)]
-        rand_phi = rand2*np.pi/360  /2 * [-1,1][np.random.randint(2)]
+        rand_theta = rand1*np.pi/360/10 * [-1,1][np.random.randint(2)]
+        rand_phi = rand2*np.pi/360  /10 * [-1,1][np.random.randint(2)]
         # shift every subsequent bead, NOTE: not applicable for final bead
         if forward:
             for nextseg in range(seg_index+1, self.num_segments): # bends down one direction of chain
@@ -395,13 +392,14 @@ class Simulation:
         self.StrandA = StrandA
         self.StrandB = StrandB
         
-        self.free_energy = self.StrandA.free_energy() + self.StrandB.free_energy()
+        self.energy = self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elec(self.StrandB)
     
         self.trajectoryA = []
         self.trajectoryB = []
         self.pair_count = []
-        self.fe_traj = []
+        self.eng_traj = []
         self.save_trajectory()
+        
         
     def montecarlostep(self):
         #prop_StrandA, prop_StrandB = self.StrandA.propose_change_both_whole()
@@ -415,54 +413,25 @@ class Simulation:
            prop_StrandB = self.StrandB.propose_change_whole(np.random.randint(int(self.StrandB.num_segments/10),int(9*self.StrandB.num_segments/10)))
         
         # calculate deltaE 
-        prev_energy = self.free_energy 
-        prop_energy = prop_StrandA.free_energy() + prop_StrandB.free_energy()
+        prev_energy = self.energy 
+        prop_energy = prop_StrandA.eng_elastic() + prop_StrandB.eng_elastic() + prop_StrandA.eng_elec(prop_StrandB)
         deltaE = prop_energy - prev_energy
     
         if deltaE <= 0: # assign new string change, which has already 'passed' conditions from proposal 
             self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
-            self.free_energy = prop_energy
+            self.energy = prop_energy
             self.mctime += 0.0 # assign energy, strings and trajectories
     
         elif deltaE >= 0:
             random_factor = np.random.random()
-            boltzmann_factor = np.e**(-1*deltaE/(temp)) # delt_eng in kb units
+            boltzmann_factor = np.e**(-1*deltaE/(temp)) # deltaE in kb units
             if random_factor < boltzmann_factor: # assign new string change
                 self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
-                self.free_energy = prop_energy 
+                self.energy = prop_energy 
                 self.mctime += 0.0 # assign energy, strings and trajectories
                     
         self.nsteps += 1
         self.save_trajectory()
-        
-    def montecarlostep_old(self):
-        prop_StrandA = self.StrandA.propose_change_whole()
-        prop_StrandB = self.StrandB.propose_change_whole()
-                
-        # test for valid configuration
-        if prop_StrandA.check_excvol(prop_StrandB) and prop_StrandA.check_inbox(self.boxlims) and prop_StrandB.check_inbox(self.boxlims) and prop_StrandA.check_strintact_whole() and prop_StrandB.check_strintact_whole():
-        
-            # calculate deltaE 
-            prev_energy = self.free_energy 
-            prop_energy = prop_StrandA.free_energy() + prop_StrandB.free_energy()
-            deltaE = prop_energy - prev_energy
-        
-            if deltaE <= 0: # assign new string change, which has already 'passed' conditions from proposal 
-                self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
-                self.save_trajectory()
-                self.free_energy = prop_energy
-                self.mctime += 0.0 # assign energy, strings and trajectories
-        
-            elif deltaE >= 0:
-                random_factor = np.random.random()
-                boltzmann_factor = np.e**(-1*deltaE/(temp)) # delt_eng in kb units
-                if random_factor < boltzmann_factor: # assign new string change
-                    self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
-                    self.save_trajectory()
-                    self.free_energy = prop_energy 
-                    self.mctime += 0.0 # assign energy, strings and trajectories
-                        
-            self.nsteps += 1
             
     # for data analysis
     def save_trajectory(self):
@@ -477,7 +446,7 @@ class Simulation:
             new_trajB.append(np.array([seg.position.x,seg.position.y,seg.position.z]))
         self.trajectoryB.append(new_trajB)
         
-        self.fe_traj.append(self.free_energy)
+        self.eng_traj.append(self.energy)
     
     def endtoend(self, tindex):
         endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1])
