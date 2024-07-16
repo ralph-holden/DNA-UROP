@@ -99,6 +99,7 @@ plt.plot(xsteps, endtoendA, label = 'Strand A')
 plt.plot(xsteps, endtoendB, label = 'Strand B')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
+plt.savefig('endtoend.png')
 plt.show()
 
 # plotting total free energy
@@ -112,6 +113,7 @@ plt.ylabel('Free Energy, $k_bT$')
 plt.plot(xsteps, sim.fe_traj, label='')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
+plt.savefig('energy.png')
 plt.show()
     
 # # # ANIMATION # # #
