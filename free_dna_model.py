@@ -29,6 +29,9 @@ kappab = lp * kb * temp # bending stiffness
 
 
 # # # aux functions # # #
+x = np.linspace(0,4,int(4/0.2))
+nonhomolfunc = (x-1)**2 - 1
+#homolrecfunc = 
 
 # # # vector class # # #
 # for maths
@@ -95,7 +98,7 @@ class Vector():
         tuple: A tuple containing the spherical coordinates (r, theta, phi).
         """
         #r = np.sqrt(x**2 + y**2 + z**2)
-        r = np.linalg.norm([self.x,self.y,self.z])
+        r = np.linalg.norm([self.x,self.y,self.z]) # causing errors with smaller box sizes??
         theta = np.arctan2(self.y, self.x)
         phi = np.arccos(self.z / r)
         return r, theta, phi
@@ -123,16 +126,15 @@ class Vector():
 class Bead: 
     def __init__(self, position: Vector):
         self.position = position
-        self.radius = 0.5
+        self.radius = 0.1
         
     def overlap(self, other) -> Tuple[bool, float]: 
         inter_vector = self.position.arr - other.position.arr
         min_approach = self.radius + other.radius + 0.01 # tolerance to account for rounding errors that could stall the simulation
-        #dist = inter_vector.norm()
         dist = np.linalg.norm(inter_vector)
         return dist <= min_approach, dist
     
-    def inter_vector(self, other) -> Tuple[bool, float]: 
+    def inter_vector(self, other) -> float: 
         intervec = other.position.arr - self.position.arr
         return intervec
     
@@ -150,7 +152,7 @@ class Strand:
         if initial:
             self.dnastr = [Bead(start_position)]
             for seg in range(num_segments-1):
-                self.dnastr.append( Bead( self.dnastr[-1].position + Vector(0,1,0) ) )
+                self.dnastr.append( Bead( self.dnastr[-1].position + Vector(0,0.2,0) ) )
         elif not initial:
             self.dnastr = [prev_dnastr[0].copy()]
             for seg in prev_dnastr[1:]:
@@ -224,8 +226,9 @@ class Strand:
         as per confinement
         True if within box, False if outside of box
         '''
+        seg_rad = self.dnastr[0].radius
         for seg in self.dnastr:
-            if abs(seg.position.x)+0.5 > boxlims.x or abs(seg.position.y)+0.5 > boxlims.y or abs(seg.position.z)+0.5 > boxlims.z:
+            if abs(seg.position.x)+seg_rad > boxlims.x or abs(seg.position.y)+seg_rad > boxlims.y or abs(seg.position.z)+seg_rad > boxlims.z:
                 return False
         return True 
     
@@ -235,11 +238,11 @@ class Strand:
         '''
         if first:
             if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num:
-                return [-1]
+                return [1]
             else:
                 return [0]
         if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) == 0:
-            return [-1]
+            return [1]
         elif self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) != 0: 
             return [abs(self.interactivity[seg_index+fororbac])+1] # more repulsive than previous by kbT
         else:
@@ -272,10 +275,15 @@ class Strand:
         self.interactivity = self.condition_interactivity(other, +1, False, 0, 2) + self.interactivity
     
     def eng_elec(self):
-        return np.sum(self.interactivity)
+        energy, eng_bit = 0, 0
+        for i in self.interactivity: # interactivity gives INDEX of segment on non homologous interaction function
+            eng_bit = nonhomolfunc[i] if i != 0 else eng_bit # updates the energy of the paired sequence, overwrites previous
+            energy += eng_bit if i == 0 else 0 # when paired sequence ends submit energy of part, if not paired OR sequence 'unfinished' submits 0
+            eng_bit = 0 if i == 0 else eng_bit # resets eng_bit at the end of non interacting part
+        energy += eng_bit # for case that final segment is paired
+        return energy
 
     def find_angle(self, seg_index):
-        # Points p1, p2, and p3 are arrays or tuples of the form [x, y]
         p1 = self.dnastr[seg_index-1].position.arr
         p2 = self.dnastr[seg_index].position.arr
         p3 = self.dnastr[seg_index+1].position.arr
@@ -374,48 +382,7 @@ class Strand:
         return prop_Strand
     
     
-    def propose_change_both(self, seg_indexA: int, seg_indexB: int, forward = True):
-        
-        prop_Strand = self.copy()
-        
-        rand_thetaA = np.random.random()*np.pi/720 * [-1,1][np.random.randint(2)]
-        rand_phiA = np.random.random()*np.pi/720   * [-1,1][np.random.randint(2)]
-        rand_thetaB = np.random.random()*np.pi/720 * [-1,1][np.random.randint(2)]
-        rand_phiB = np.random.random()*np.pi/720   * [-1,1][np.random.randint(2)]
-        # at most a 0.25 degree bend allowed
-        # shift every subsequent bead, NOTE: not applicable for final bead
-        if forward:
-            for nextseg in range(seg_indexA+1, self.num_segments): # bends down one direction of chain
-                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_indexA, nextseg, rand_thetaA, rand_phiA)
-            for nextseg in range(seg_indexB+1, self.num_segments): # bends down one direction of chain
-                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_indexB, nextseg, rand_thetaB, rand_phiB)
-        elif not forward:
-            for nextseg in range(seg_indexA-1, -1, -1):
-                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_indexA, nextseg, rand_thetaA, rand_phiA)
-            for nextseg in range(seg_indexB-1, -1, -1):
-                prop_Strand.dnastr[nextseg].position = prop_Strand.calc_arc(seg_indexB, nextseg, rand_thetaB, rand_phiB)
-        return prop_Strand
-    
-    
-    def propose_change_both_whole(self):
-        '''Doesnt work! Dont use'''
-        # random initial segment in middle 3/5 of DNA strand
-        random_start_indexA = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
-        random_start_indexB = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
-        # in current model, do not need to propose a change to the starting segmentrandom_start_indexA = np.random.randint(int(self.num_segments/10),int(9*self.num_segments/10))
-        # make copy for first time, then after, update that
-        # going forwards, updating entire rest of strand each time
-        prop_StrandA = self.propose_change(random_start_indexA, forward = True) # first bend
-        prop_StrandB = self.propose_change(random_start_indexB, forward = True) # first bend
-        for seg_index in range(random_start_indexA+1, self.num_segments-1): # again, final bead cannot bend a further
-            prop_StrandA = prop_StrandA.propose_change(seg_index, forward = True)
-        for seg_index in range(random_start_indexB+1, self.num_segments-1): # again, final bead cannot bend a further
-            prop_StrandB = prop_StrandB.propose_change(seg_index, forward = True)
-        for seg_index in range(random_start_indexA+1, 0, -1): # again, final bead cannot bend a further
-            prop_StrandA = prop_StrandA.propose_change(seg_index, forward = False)
-        for seg_index in range(random_start_indexB+1, 0, -1): # again, final bead cannot bend a further
-            prop_StrandB = prop_StrandB.propose_change(seg_index, forward = False)
-        return prop_StrandA, prop_StrandB
+
     
 class Simulation:
     
@@ -436,11 +403,7 @@ class Simulation:
         self.fe_traj = []
         self.save_trajectory()
         
-        
-
-        
-        
-    def montecarlostep_trial(self):
+    def montecarlostep(self):
         #prop_StrandA, prop_StrandB = self.StrandA.propose_change_both_whole()
         prop_StrandA = self.StrandA.propose_change_whole(random_start_index = np.random.randint(int(self.StrandA.num_segments/10),int(9*self.StrandA.num_segments/10)))
         prop_StrandB = self.StrandB.propose_change_whole(random_start_index = np.random.randint(int(self.StrandB.num_segments/10),int(9*self.StrandB.num_segments/10)))
@@ -463,7 +426,7 @@ class Simulation:
     
         elif deltaE >= 0:
             random_factor = np.random.random()
-            boltzmann_factor = np.e**(-1*deltaE/(1)) # delt_eng in kb units
+            boltzmann_factor = np.e**(-1*deltaE/(temp)) # delt_eng in kb units
             if random_factor < boltzmann_factor: # assign new string change
                 self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
                 self.free_energy = prop_energy 
@@ -472,7 +435,7 @@ class Simulation:
         self.nsteps += 1
         self.save_trajectory()
         
-    def montecarlostep(self):
+    def montecarlostep_old(self):
         prop_StrandA = self.StrandA.propose_change_whole()
         prop_StrandB = self.StrandB.propose_change_whole()
                 
@@ -486,8 +449,6 @@ class Simulation:
         
             if deltaE <= 0: # assign new string change, which has already 'passed' conditions from proposal 
                 self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
-                #self.trajectoryA.append(self.StrandA.dnastr)
-                #self.trajectoryB.append(self.StrandB.dnastr)
                 self.save_trajectory()
                 self.free_energy = prop_energy
                 self.mctime += 0.0 # assign energy, strings and trajectories
@@ -497,8 +458,6 @@ class Simulation:
                 boltzmann_factor = np.e**(-1*deltaE/(temp)) # delt_eng in kb units
                 if random_factor < boltzmann_factor: # assign new string change
                     self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
-                    #self.trajectoryA.append(self.StrandA.dnastr)
-                    #self.trajectoryB.append(self.StrandB.dnastr)
                     self.save_trajectory()
                     self.free_energy = prop_energy 
                     self.mctime += 0.0 # assign energy, strings and trajectories
