@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
 """
 Created on Sat Jul 11 13:06:51 2024
 
@@ -7,27 +6,27 @@ Created on Sat Jul 11 13:06:51 2024
 """
 # # # IMPORTS # # #
 from free_dna_model import Vector, Bead, Strand, Simulation, np, Tuple, combinations
-from free_dna_model import kb, temp, kappab, lp
+#from free_dna_model import kb, temp, kappab, lp
 import pickle
 import sys
 import logging
 from datetime import datetime
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+#from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation, PillowWriter
 
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 2000
-# Length of Segments
-nsegs = 90
-ystart = -nsegs/2
+nsteps = 5000
+# Length of Segments, where each segment/grain is 1/5 helical coherence length
+nsegs = 5 * 30
+ystart = -nsegs/5/2
 # Separation (along x axis)
 sep = 5
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 20, 50, 20 # from -lim to +lim 
+xlim, ylim, zlim = 20, 20, 20 # from -lim to +lim 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
@@ -47,7 +46,7 @@ logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message
 logging.info('Simulation started')
 
 for i, item in enumerate(range(nsteps)):
-    sim.montecarlostep_trial()
+    sim.montecarlostep()
     
     length = 20
     progress = (i + 1) / nsteps
