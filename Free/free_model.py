@@ -16,6 +16,7 @@ CODE & SIMULATION:
 """
 # # # IMPORTS # # #
 import numpy as np
+import scipy as scipy
 from typing import Tuple
 from itertools import combinations
 
@@ -24,13 +25,13 @@ kb = 1
 temp = 310.15
 
 # PARAMS
-lp = 4.5 # persistence length, in correlation length diameter grains of 100 Angstroms
+lp = 4.5 # persistence length, in coherence length diameter grains of 100 Angstroms
 kappab = lp * kb * temp # bending stiffness
 
 
 # # # aux functions # # #
 x = np.linspace(0,1000,int(1000/0.2)+1)
-nonhomolfunc = np.concatenate((-x[x <= 1.0],2*(x-1.5)[x > 1])) #zero@start, -1 kbT @ 1 lc, +1 kbT @ 2lc, & so on
+nonhomolfunc = np.concatenate((-x[x <= 1.0],(x-2)[x > 1])) #zero@start, -1 kbT @ 1 lc, +1 kbT @ 2lc, & so on
 #homolrecfunc = 
 
 # # # vector class # # #
@@ -249,18 +250,17 @@ class Strand:
     def gen_interactivity(self, other) -> list:
         '''Prioritises sticking to middle (first assigned hence without dependance on +- 1)
         Generates from 0th Bead, electrostatic interaction counted for whole Strand
+        Does for BOTH strands
         '''
-        # starter
-        self.interactivity = self.condition_interactivity(other, 0, True, 0, 2)
-        
-        # forwards
+        self.interactivity  = self.condition_interactivity(other, 0, True, 0, 2) # starter
+        other.interactivity = other.condition_interactivity(self, 0, True, 0, 2)
         for seg_index in range(1,self.num_segments-1): # from index+1 to penultimate
-            self.interactivity += self.condition_interactivity(other, -1, False, seg_index, 3)
-            
-        # end (from forwards)
-        self.interactivity += self.condition_interactivity(other, -1, False, -1, 2)
+            self.interactivity  += self.condition_interactivity(other, -1, False, seg_index, 3) # forward
+            other.interactivity += other.condition_interactivity(self, -1, False, seg_index, 3)
+        self.interactivity  += self.condition_interactivity(other, -1, False, -1, 2) # end
+        other.interactivity += other.condition_interactivity(self, -1, False, -1, 3)
     
-    def eng_elec(self, other):
+    def eng_elec_old(self, other):
         energy, eng_bit = 0, 0
         self.gen_interactivity(other)
         for i in self.interactivity: # interactivity gives INDEX of segment on non homologous interaction function
@@ -276,6 +276,19 @@ class Strand:
             eng_bit = 0 if i == 0 else eng_bit 
         energy += eng_bit 
         return energy
+    
+    def eng_elec(self, other):
+        '''Does electrostatic energy of BOTH strands, avoids lengthy loops of eng_elec_old'''
+        self.gen_interactivity(other)
+        energy = 0
+        for i in scipy.signal.find_peaks(self.interactivity)[0]: # much shorter loop
+            energy += nonhomolfunc[self.interactivity[i]]
+        energy += nonhomolfunc[self.interactivity[-1]] # SciPy will miss any final
+        for i in scipy.signal.find_peaks(other.interactivity)[0]: # much shorter loop
+            energy += nonhomolfunc[other.interactivity[i]]
+        energy += nonhomolfunc[other.interactivity[-1]] # SciPy will miss any final
+        return energy
+        
 
     def find_angle(self, seg_index):
         p1 = self.dnastr[seg_index-1].position.arr
@@ -371,7 +384,7 @@ class Strand:
     
 class Simulation:
     
-    nsteps = 1
+    nsteps = 0
     mctime = 0.0
     
     def __init__(self, boxlims: Vector, StrandA: Strand, StrandB: Strand):
@@ -417,9 +430,9 @@ class Simulation:
                 self.StrandA, self.StrandB = prop_StrandA, prop_StrandB
                 self.energy = prop_energy 
                 self.mctime += 0.0 # assign energy, strings and trajectories
-                    
-        self.nsteps += 1
+                     
         self.save_trajectory()
+        self.nsteps += 1
             
     # for data analysis
     def save_trajectory(self):
@@ -435,24 +448,22 @@ class Simulation:
         self.trajectoryB.append(new_trajB)
         
         self.eng_traj.append(self.energy)
+        totpair, selfpair = self.count_tot()
+        self.pair_count.append([totpair, selfpair])
     
     def endtoend(self, tindex):
         endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1])
         endtoendB = np.linalg.norm(self.trajectoryB[tindex][0] - self.trajectoryB[tindex][-1])
         return endtoendA, endtoendB
     
-    def count_tot(self, other):
-        '''Discounts immediate neighbours from pairs'''
-        pass
-        #self.paired_count = 0
-        #if self.count_adj_same(0) >= 2:
-        #    self.paired_count += 1
-        #if self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) == 0:
-        #    return [-1]
-        #elif self.count_adj_same(seg_index) + self.count_adj_other(seg_index, other) >= num and abs(self.interactivity[seg_index+fororbac]) != 0: 
-        #    return [abs(self.interactivity[seg_index+fororbac])+1] # more repulsive than previous by kbT
-        #else:
-        #    return [0]
+    def count_tot(self):
+        '''Discounts immediate neighbours from pairs
+        Must be run only after gen_interactivity'''
+        comparearray = np.zeros(len(self.StrandA.interactivity))
+        pairsA = np.sum(np.array(self.StrandA.interactivity)!=comparearray)
+        pairsB = np.sum(np.array(self.StrandB.interactivity)!=comparearray)
+        totpairs = int((pairsA+pairsB)/2)
+        return totpairs, pairsA - totpairs
     
     def statistics(self):
         pass
