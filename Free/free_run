@@ -5,8 +5,8 @@ Created on Sat Jul 11 13:06:51 2024
 @author: 44775 Ralph Holden
 """
 # # # IMPORTS # # #
-from free_dna_model import Vector, Bead, Strand, Simulation, np, Tuple, combinations
-from free_dna_model import kb, temp, kappab, lp
+from free_model import Vector, Bead, Strand, Simulation, np, Tuple, combinations
+from free_model import kb, temp, kappab, lp
 import pickle
 import sys
 import logging
@@ -18,20 +18,20 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 5000
+nsteps = 1
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
 nsegs = 5 * 30
 ystart = -nsegs/5/2
 # Separation (along x axis)
-sep = 1
+sep = 0.2
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 20, 20, 20 # from -lim to +lim 
+xlim, ylim, zlim = 10, 20, 10 # from -lim to +lim 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
 save_data = True
-log_update = 100 # how often to publish values to the log file
+log_update = 10 # how often to publish values to the log file
 # animation?
 animate = True
 frame_hop = 50 # frame dump frequency
@@ -78,12 +78,14 @@ sim.trajectoryA = np.array(sim.trajectoryA)
 sim.trajectoryB = np.array(sim.trajectoryB)    
 
 # extracting data from trajectories
-xsteps = np.linspace(0,sim.nsteps,sim.nsteps)
+xsteps = np.linspace(0,sim.nsteps+1,sim.nsteps+1)
 endtoendA = []
 endtoendB = []
 for t in range(len(sim.trajectoryA)):
     a, b = sim.endtoend(t)
     endtoendA.append(a), endtoendB.append(b)
+totpair = np.array(sim.pair_count)[:,0]
+selfpair = np.array(sim.pair_count)[:,1]
 
 # plotting end to end distances
 endtoendendA, endtoendendB = sim.endtoend(-1)
@@ -100,6 +102,23 @@ plt.plot(xsteps, endtoendB, label = 'Strand B')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
 plt.savefig('./Data_outputs/endtoend.png')
+plt.show()
+
+# plotting number of pairs
+totpair_end, selfpair_end = sim.count_tot()
+print()
+print(f'Total number of paired grains = {totpair_end}')
+print(f'Number of paired grains to self = {selfpair_end}')
+
+plt.figure()
+plt.title('Coarse Grain DNA Pairs')
+plt.xlabel('Monte Carlo Step')
+plt.ylabel('Paired DNA Grains, $0.2 l_c$')
+plt.plot(xsteps, totpair, label = 'Total')
+plt.plot(xsteps, selfpair, label = 'Self')
+plt.grid(linestyle=':')
+plt.legend(loc='best')
+plt.savefig('./Data_outputs/pairs.png')
 plt.show()
 
 # plotting total free energy
