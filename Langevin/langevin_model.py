@@ -4,7 +4,7 @@ Created on Thu Jul 18 18:11:06 2024
 
 @author: Ralph Holden
 """
-# # # IMPORTS # # #
+# imports
 from itertools import combinations
 import numpy as np
 import matplotlib.pyplot as plt
@@ -109,8 +109,8 @@ class Strand:
                 force = force_magnitude * force_direction
                 #self.dnastr[i].update_velocity(-force, 1) if i<self.num_segments else self.dnastr[i-self.num_segments].update_velocity(-force, 1)
                 #self.dnastr[j].update_velocity( force, 1) if j<self.num_segments else self.dnastr[j-self.num_segments].update_velocity( force, 1)
-                igrain.update_velocity(-force, 1)
-                jgrain.update_velocity( force, 1)
+                igrain.update_velocity(-force, dt)
+                jgrain.update_velocity( force, dt)
                 
     # WLC bending energies
     def f_wlc(self):
@@ -129,8 +129,8 @@ class Strand:
             torque_direction = np.cross(r1, r2)
             torque_direction /= np.linalg.norm(torque_direction) if np.linalg.norm(torque_direction) != 0 else 1.0
             torque = torque_magnitude * torque_direction
-            self.dnastr[i].update_velocity(torque, 1)
-            self.dnastr[i+1].update_velocity(-torque, 1)
+            self.dnastr[i].update_velocity(torque, dt)
+            self.dnastr[i+1].update_velocity(-torque, dt)
         
     def find_angle(self, seg_index):
         p1 = self.dnastr[seg_index-1].position
@@ -218,6 +218,13 @@ class Strand:
         self.interactivity  += self.condition_interactivity(other, -1, False, -1, 2) # end
         other.interactivity += other.condition_interactivity(self, -1, False, -1, 3)
         
+    def f_elstat(self):
+        pass
+        # find each interacting segment from start to end
+        # apply attraction or repulsion to all (based off gradient of non homologous energy) ?
+        # OR choose attractive grain, repel all others by increasing amount ?
+        # INCLUDE variation by distance - like trunctated LJ force
+        
     # for energies, not including bond springs or translational energy
     def eng_elec(self, other):
         '''Does electrostatic energy of BOTH strands, avoids lengthy loops of eng_elec_old'''
@@ -272,7 +279,7 @@ class Simulation:
             # Random thermal force
             random_force = np.random.normal(0, np.sqrt(2 * lamb * kb * temp / dt), size=3)
             # Damping force
-            damping_force = -lamb * grain.velocity
+            damping_force = -lamb * grain.velocity # with lamb = 1, zeroes previous velocity
             # Total force
             total_force = random_force + damping_force
             grain.update_velocity(total_force, dt)
