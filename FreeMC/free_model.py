@@ -5,18 +5,24 @@ Created on Thu Jul 11 13:06:51 2024
 @author: 44775 Ralph Holden
 
 MODEL:
-    ball & sticks DNA - like polymer
-    balls / particles joined up by straight sticks
-    balls / particles correspond to one correlation length as described in Kornyshev-Leiken theory
-        as such, for non homologous DNA, only one consecutive correlation length can have attractive charged double helix interactions
+    polymer bead model - Worm-like-Chain, including excluded volume and specialised dsDNA interactions
+    beads correspond to 1/5 correlation length as described in Kornyshev-Leiken theory
+        as such, for non homologous DNA, only one consecutive helical coherence length can have attractive charged double helix interactions
    
 CODE & SIMULATION:
     Metropolis algorithm (a Monte Carlo method) used to propagate DNA strands
-    Additional requirements for a random move are; excluded volume effects, keeping the strand intact, and keeping inside the simulation box (confined DNA, closed simulation)
+    Each Monte Carlo step shifts bead angle along entire dsDNA strand
+    Additional requirements for a random move are; 
+        excluded volume interactions
+        keeping the strand intact
+        and keeping inside the simulation box (confined DNA, closed simulation)
+    Energy dependant on:
+        worm like chain bending (small angle approx -> angular harmonic)
+        conditional electrostatic interactions as described in Kornyshev-Leikin theory
 """
 # # # IMPORTS # # #
 import numpy as np
-import scipy as scipy
+from scipy import signal
 from typing import Tuple
 from itertools import combinations
 
@@ -125,6 +131,10 @@ class Vector():
 
 # # # bead class # # #
 class Bead: 
+    '''
+    Each individual element of the DNA strand
+    Diameter is 1/5 helical coherence length
+    '''
     def __init__(self, position: Vector):
         self.position = position
         self.radius = 0.1
@@ -144,6 +154,11 @@ class Bead:
     
     
 class Strand:
+    '''
+    Each dsDNA strand involved in the simulation
+    Worm-Like-Chain bead angles
+    Kornyshev-Leiken electrostatic interactions
+    '''
     
     def __init__(self, num_segments: int, start_position: Vector, initial = True, prev_dnastr = None):
         
@@ -281,10 +296,10 @@ class Strand:
         '''Does electrostatic energy of BOTH strands, avoids lengthy loops of eng_elec_old'''
         self.gen_interactivity(other)
         energy = 0
-        for i in scipy.signal.find_peaks(self.interactivity)[0]: # much shorter loop
+        for i in signal.find_peaks(self.interactivity)[0]: # much shorter loop
             energy += nonhomolfunc[self.interactivity[i]]
         energy += nonhomolfunc[self.interactivity[-1]] # SciPy will miss any final
-        for i in scipy.signal.find_peaks(other.interactivity)[0]: # much shorter loop
+        for i in signal.find_peaks(other.interactivity)[0]: # much shorter loop
             energy += nonhomolfunc[other.interactivity[i]]
         energy += nonhomolfunc[other.interactivity[-1]] # SciPy will miss any final
         return energy
@@ -383,7 +398,10 @@ class Strand:
 
     
 class Simulation:
-    
+    '''
+    Runs simulation of two dsDNA strands
+    Records data
+    '''
     nsteps = 0
     mctime = 0.0
     
