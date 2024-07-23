@@ -3,6 +3,23 @@
 Created on Thu Jul 18 18:11:06 2024
 
 @author: Ralph Holden
+
+MODEL:
+    polymer bead model - Worm-like-Chain, including excluded volume and specialised dsDNA interactions
+    beads correspond to 1/5 correlation length as described in Kornyshev-Leiken theory
+        as such, for non homologous DNA, only one consecutive helical coherence length can have attractive charged double helix interactions
+   
+CODE & SIMULATION:
+    Langevin dynamics (a Monte Carlo method) used to propagate each grain in the dsDNA strands
+    Additional forces involved are; 
+        a truncated LJ potential for excluded volume effects
+        harmonic grain springs for keeping the strand intact (artifical 'fix')
+        harmonic angular springs for the worm like chain
+        conditional electrostatic interactions as described in Kornyshev-Leikin theory
+        + keeping inside the simulation box (confined DNA, closed simulation, artificicial 'fix' to avoid lost particles)
+    Energy dependant on:
+        worm like chain bending (small angle approx -> angular harmonic)
+        conditional electrostatic interactions as described in Kornyshev-Leikin theory
 """
 # imports
 from itertools import combinations
@@ -30,11 +47,11 @@ epsilon = 5*kb # energy scale for excluded volume interactions
 x = np.linspace(0,1000,int(1000/0.2)+1)
 nonhomolfunc = np.concatenate((-x[x <= 1.0],(x-2)[x > 1])) #zero@start, -1 kbT @ 1 lc, +1 kbT @ 2lc, & so on
 
-# Homologous pairs interaction energy
-homolfunc = -x 
+# Homologous pairs interaction energy, for grains 1/5 the corellation length
+homologous_pair_interaction = -4/5 * kb * 300
 
 # Langevin 
-lamb = 1 # damping coefficient
+lamb = 0.5 # damping coefficient
 dt = 0.001 # timestep
 
 # # # Aux functions # # #
@@ -44,7 +61,7 @@ def rand_v():
 def gen_grains(coherence_lengths, start_position):
     strand = [Grain(start_position, rand_v())]
     for i in range(5*coherence_lengths -1):
-        strand.append( Grain( strand[-1].position + np.array([0,0.2,0]), rand_v() ) )
+        strand.append( Grain( strand[-1].position + np.array([0, 0.2, 0]), rand_v() ) )
     return strand
 
 class Grain():
@@ -125,7 +142,7 @@ class Strand:
             # Cosine of the angle between r1 and r2
             cos_theta = np.dot(r1, r2) / (r1_norm * r2_norm)
             theta = np.arccos(np.clip(cos_theta, -1.0, 1.0))
-            torque_magnitude = k_bend * (theta - np.pi) / (r1_norm * r2_norm)
+            torque_magnitude = k_bend / (r1_norm * r2_norm) * (theta - np.pi) 
             torque_direction = np.cross(r1, r2)
             torque_direction /= np.linalg.norm(torque_direction) if np.linalg.norm(torque_direction) != 0 else 1.0
             torque = torque_magnitude * torque_direction
@@ -206,7 +223,7 @@ class Strand:
             return [0]
         
     def gen_interactivity(self, other) -> list:
-        '''Prioritises sticking to middle (first assigned hence without dependance on +- 1)
+        '''
         Generates from 0th Bead, electrostatic interaction counted for whole Strand
         Does for BOTH strands
         '''
@@ -218,17 +235,36 @@ class Strand:
         self.interactivity  += self.condition_interactivity(other, -1, False, -1, 2) # end
         other.interactivity += other.condition_interactivity(self, -1, False, -1, 3)
         
+    def gen_interactivity_homol(self, other):
+        '''For homologous strands, must be used after "gen_interactivity" to overwrite non-homol interactions '''
+        for i, j in combinations(range(len(self.dnastr+other.dnastr)),2):
+            # rescale i, j
+            inew = i if i>self.num_segments else i-self.num_segments
+            jnew = j if j>self.num_segments else j-self.num_segments
+            # use correct strand
+            igrain = self.dnastr[i] if i<self.num_segments else other.dnastr[inew] 
+            jgrain = self.dnastr[j] if j<self.num_segments else other.dnastr[jnew]
+            if abs(inew-jnew) <= 15 and igrain.overlap(jgrain)[0]: # homologous recognition funnel
+                self.interactivity[inew] = homologous_pair_interaction/abs(inew-jnew) if i < self.num_segments else self.interactivity[inew]
+                other.interactivity[inew] = homologous_pair_interaction/abs(inew-jnew) if i > self.num_segments else other.interactivity[inew]
+                self.interactivity[jnew] = homologous_pair_interaction/abs(inew-jnew) if j < self.num_segments else self.interactivity[jnew]
+                other.interactivity[jnew] = homologous_pair_interaction/abs(inew-jnew) if j > self.num_segments else other.interactivity[jnew]
+        
     def f_elstat(self):
         pass
         # find each interacting segment from start to end
         # apply attraction or repulsion to all (based off gradient of non homologous energy) ?
         # OR choose attractive grain, repel all others by increasing amount ?
-        # INCLUDE variation by distance - like trunctated LJ force
+        # INCLUDE variation by distance - like trunctated LJ force - cutoff VS particle size??
+        # NOTE: if cutoff is significantly larger, increase num for counting pairs
+        # -delE of function from recent paper
         
     # for energies, not including bond springs or translational energy
-    def eng_elec(self, other):
+    def eng_elstat(self, other, homol=False):
         '''Does electrostatic energy of BOTH strands, avoids lengthy loops of eng_elec_old'''
         self.gen_interactivity(other)
+        if homol:
+            self.gen_interactivity_homol(other)
         energy = 0
         for i in signal.find_peaks(self.interactivity)[0]: # much shorter loop
             energy += nonhomolfunc[self.interactivity[i]]
@@ -254,7 +290,7 @@ class Simulation:
         self.StrandA = StrandA
         self.StrandB = StrandB
         
-        self.boxlims = boxlims # boxlims a Vector
+        self.boxlims = boxlims
     
         # data
         self.trajectoryA = []
@@ -274,12 +310,10 @@ class Simulation:
         
     def apply_langevin_dynamics(self):
         for grain in self.StrandA.dnastr + self.StrandB.dnastr:
-            # reset velocities
-            # grain.velocity = np.array([0.0, 0.0, 0.0])
             # Random thermal force
             random_force = np.random.normal(0, np.sqrt(2 * lamb * kb * temp / dt), size=3)
             # Damping force
-            damping_force = -lamb * grain.velocity # with lamb = 1, zeroes previous velocity
+            damping_force = -lamb * grain.velocity # with lamb = 1, zeroes previous velocity -> Brownian
             # Total force
             total_force = random_force + damping_force
             grain.update_velocity(total_force, dt)
@@ -329,4 +363,4 @@ class Simulation:
           
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
-        return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elec(self.StrandB)
+        return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
