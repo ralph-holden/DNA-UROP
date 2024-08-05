@@ -18,26 +18,29 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 10000
+nsteps = 2000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 20
+coherence_lengths = 10
 ystart = -coherence_lengths/2
 # Separation (along x axis)
-sep = 1
+sep = 0.5
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 10, 20, 10 # from -lim to +lim 
+xlim, ylim, zlim = 6, 6, 6 # from -lim to +lim 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
 save_data = False
-log_update = 100 # how often to publish values to the log file
+log_update = 10 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 1 # frame dump frequency, per logged trajectories
+frame_hop = 20 # frame dump frequency
 
 # # # INITIALISE & RUN SIMULATION # # #
-sim = Simulation(Strand(gen_grains(coherence_lengths,[xstartA,ystart,0])), Strand(gen_grains(coherence_lengths,[xstartB,ystart,0])), boxlims=np.array([xlim,ylim,zlim]))
+Strand1 = Strand(gen_grains(coherence_lengths,[xstartA,ystart,0]))
+Strand2 = Strand(gen_grains(coherence_lengths,[xstartB,ystart,0]))
+sim = Simulation(Strand1, Strand2, boxlims=np.array([xlim,ylim,zlim]))
+
 
 for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
@@ -46,7 +49,10 @@ logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message
 logging.info('Simulation started')
 
 for i, item in enumerate(range(nsteps)):
+    #k_spring = 10000*kb
     sim.run_step()
+    
+    #k_spring /= 1.1
     
     length = 20
     progress = (i + 1) / nsteps
@@ -57,7 +63,7 @@ for i, item in enumerate(range(nsteps)):
     
     # log file & data output
     if i % log_update == 0:
-        sim.record()
+        #sim.record()
         endtoendA, endtoendB = sim.endtoends[-1][0], sim.endtoends[-1][1]
         logging.info(f'''Step {i} : DATA:
 Strand A end to end = {endtoendA} lc
@@ -76,9 +82,11 @@ if save_data:
         
 
 # extracting data from trajectories
-xsteps = np.linspace(0,len(sim.trajectoryA),len(sim.trajectoryB))
+xsteps = np.linspace(0,len(sim.trajectoryA),len(sim.trajectoryA))
 endtoendA, endtoendB = np.array(sim.endtoends)[:,0], np.array(sim.endtoends)[:,1]
+endtoendA, endtoendB = list(endtoendA), list(endtoendB)
 totpair, selfpair = np.array(sim.pair_counts)[:,0], np.array(sim.pair_counts)[:,1]
+totpair, selfpair = list(totpair), list(selfpair)
 
 # plotting end to end distances
 endtoendendA, endtoendendB = sim.endtoend(-1)
@@ -88,7 +96,7 @@ print(f'End to end distance Strand B = {endtoendendB}')
 
 plt.figure()
 plt.title('Coarse Grain DNA End to End Distance')
-plt.xlabel('Monte Carlo Step')
+plt.xlabel('Timestep')
 plt.ylabel('End to End distance, $l_c$')
 plt.plot(xsteps, endtoendA, label = 'Strand A')
 plt.plot(xsteps, endtoendB, label = 'Strand B')
@@ -105,7 +113,7 @@ print(f'Number of paired grains to self = {selfpair_end}')
 
 plt.figure()
 plt.title('Coarse Grain DNA Pairs')
-plt.xlabel('Monte Carlo Step')
+plt.xlabel('Timestep')
 plt.ylabel('Paired DNA Grains, $0.2 l_c$')
 plt.plot(xsteps, totpair, label = 'Total')
 plt.plot(xsteps, selfpair, label = 'Self')
@@ -119,9 +127,9 @@ print()
 print(f'Free Energy = {sim.energies[-1]} kbT')
 
 plt.figure()
-plt.title('Coarse Grain DNA Free Energy')
-plt.xlabel('Monte Carlo Step')
-plt.ylabel('Free Energy, $k_bT$')
+plt.title('Coarse Grain DNA Internal Energy')
+plt.xlabel('Timestep')
+plt.ylabel('Energy, $k_bT$')
 plt.plot(xsteps, sim.energies, label='')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
@@ -168,26 +176,21 @@ if animate:
         x2, y2, z2 = data2[frame]
         
         # Update line plots with new data
-        line1.set_data(x1, y1)
-        line1.set_3d_properties(z1)
-        
-        line2.set_data(x2, y2)
-        line2.set_3d_properties(z2)
+        line1.set_data_3d(x1, y1, z1)
+        line2.set_data_3d(x2, y2, z2)
         
         return line1, line2
-
     
     # Create the animation
-    ani = FuncAnimation(fig, update, frames=num_frames, interval=100, blit=False)
+    ani = FuncAnimation(fig, update, frames=num_frames, interval=400, blit=False)
     
     # Save the animation as an MP4 file (uncomment to save)
-    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=5))
+    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=1))
     
     logging.info('Animation saved as GIF')
     
     # Show the plot
     plt.show()
-
     
 logging.info('Simulation completed')
 
