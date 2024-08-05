@@ -5,7 +5,7 @@ Created on Sat Jul 11 13:06:51 2024
 @author: 44775 Ralph Holden
 """
 # # # IMPORTS # # #
-from free_model import Vector, Bead, Strand, Simulation, np, Tuple, combinations
+from free_model import Vector, Bead, create_strand, Strand, Simulation, np, Tuple, combinations
 from free_model import kb, temp, kappab, lp
 import pickle
 import sys
@@ -15,29 +15,33 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation, PillowWriter
 
-
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 1
+nsteps = 100
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-nsegs = 5 * 30
+coherence_lengths = 11
+nsegs = 5 * coherence_lengths
 ystart = -nsegs/5/2
 # Separation (along x axis)
-sep = 0.2
+sep = 0.5
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 10, 20, 10 # from -lim to +lim 
+xlim, ylim, zlim = 6, 6, 6 # from -lim to +lim 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
-save_data = True
+save_data = False
 log_update = 10 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 50 # frame dump frequency
+frame_hop = 10 # frame dump frequency
+
 
 # # # INITIALISE & RUN SIMULATION # # #
-sim = Simulation(boxlims=Vector(xlim,ylim,zlim), StrandA=Strand(nsegs,Vector(xstartA,ystart,0)), StrandB=Strand(nsegs,Vector(xstartB,ystart,0)))
+Strand1 = create_strand(nsegs,xstartA,ystart,0)
+Strand2 = create_strand(nsegs,xstartB,ystart,0)
+sim = Simulation(boxlims=Vector(xlim,ylim,zlim), StrandA=Strand1, StrandB=Strand2)
+
 
 for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
