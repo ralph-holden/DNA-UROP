@@ -18,23 +18,24 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 2000
+nsteps = 1
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 10
+coherence_lengths = 20
 ystart = -coherence_lengths/2
-# Separation (along x axis)
-sep = 0.5
+# Separation, surface to surface (along x axis)
+sep = 0.7
+sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 6, 6, 6 # from -lim to +lim 
+xlim, ylim, zlim = 6, 12, 6 # from -lim to +lim 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
 save_data = False
-log_update = 10 # how often to publish values to the log file
+log_update = 50 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 20 # frame dump frequency
+frame_hop = 50 # frame dump frequency
 
 # # # INITIALISE & RUN SIMULATION # # #
 Strand1 = Strand(gen_grains(coherence_lengths,[xstartA,ystart,0]))
@@ -49,11 +50,8 @@ logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message
 logging.info('Simulation started')
 
 for i, item in enumerate(range(nsteps)):
-    #k_spring = 10000*kb
     sim.run_step()
-    
-    #k_spring /= 1.1
-    
+        
     length = 20
     progress = (i + 1) / nsteps
     bar_length = int(length * progress)
@@ -68,10 +66,12 @@ for i, item in enumerate(range(nsteps)):
         logging.info(f'''Step {i} : DATA:
 Strand A end to end = {endtoendA} lc
 Strand B end to end = {endtoendB} lc
+Total Pairs = {sim.pair_counts[-1][0]}
 Simulation Total Energy = {sim.energies[-1]} 
 ...''')
         print(f'''\rStrand A end to end = {endtoendA} lc
 Strand B end to end = {endtoendB} lc
+Total Pairs = {sim.pair_counts[-1][0]}
 Simulation Total Energy = {sim.energies[-1]} 
 ...''')
     
@@ -163,6 +163,9 @@ if animate:
     line1, = ax.plot(x1, y1, z1, color='b', marker='.', markersize=1, label='DNA strand A')
     line2, = ax.plot(x2, y2, z2, color='r', marker='.', markersize=1, label='DNA strand B')
     
+    # Create a text label for the frame number, initially set to the first frame
+    frame_text = ax.text2D(0.05, 0.95, f"Frame: {selected_frames[0]}", transform=ax.transAxes)
+    
     # Axis limits
     ax.set_xlim(-sim.boxlims[0], sim.boxlims[0])
     ax.set_ylim(-sim.boxlims[1], sim.boxlims[1])
@@ -179,13 +182,16 @@ if animate:
         line1.set_data_3d(x1, y1, z1)
         line2.set_data_3d(x2, y2, z2)
         
-        return line1, line2
+        # Update the frame number text
+        frame_text.set_text(f"Frame: {selected_frames[frame]}")
+
+        return line1, line2, frame_text
     
     # Create the animation
     ani = FuncAnimation(fig, update, frames=num_frames, interval=400, blit=False)
     
     # Save the animation as an MP4 file (uncomment to save)
-    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=1))
+    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=5))
     
     logging.info('Animation saved as GIF')
     
@@ -193,4 +199,3 @@ if animate:
     plt.show()
     
 logging.info('Simulation completed')
-
