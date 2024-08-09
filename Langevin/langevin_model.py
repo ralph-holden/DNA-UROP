@@ -30,6 +30,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import signal
 from typing import Tuple
+from scipy import special
+from scipy.constants import epsilon_0, Boltzmann
 
 # # # UNITS # # #
 kb = 1 #1.38e-23
@@ -44,20 +46,15 @@ k_bend = kappab/s # Bending stiffness constant
 
 k_spring = 300*kb  # Spring constant for bonds
 
-# Truncated LJ excluded volume interaction
-sigma = 0.10 # distance scale for excluded volume interactions, where Grain diameter is 0.2
-epsilon = kb * 300 # energy scale for excluded volume interactions
-
-# NON-homologous pairs interaction energy, UNITS TO COMPARE??
-x = np.linspace(0,1000,int(1000/0.2)+1)
-nonhomolfunc = np.concatenate((-x[x <= 1.0],(x-2)[x > 1])) #zero@start, -1 kbT @ 1 lc, 0 kbT @ 2lc, & so on
-
-# Homologous pairs interaction energy, for grains 1/5 the corellation length
-homologous_pair_interaction = -4/5 * kb * 300
+# Simulation Interaction Parameters
+R_cut = 0.75 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms)
+self_interaction_limit = 5 # avoid interactions between grains in same strand
 
 # Langevin 
 lamb = 1 # damping coefficient
-dt = 0.002 # timestep
+dt = 0.0005 # timestep
+
+
 
 # # # Aux functions # # #
 def gen_grains(coherence_lengths, start_position):
@@ -65,6 +62,160 @@ def gen_grains(coherence_lengths, start_position):
     for i in range(5*coherence_lengths):
         strand.append( Grain( strand[-1].position + np.array([0, 0.2, 0]), np.zeros(3) ) )
     return strand
+
+
+
+# # # ELECTROSTATICS # # #
+class Electrostatics:
+    ''' 
+    Electrostatic helical interaction as described by Kornyshev - Leikin theory
+    From 'Sequence Recognition in the Pairing of DNA Duplexes', Kornyshev & Leikin, 2001, DOI: 10.1103/PhysRevLett.86.3666
+    '''
+    # constants
+    eps = 80 # ~dielectric constant water, conversion to per Angstrom^-3
+    r = 9 * 10**-10 # radius phosphate cylinder, in Angstroms 
+    sigma = 16.8 # phosphate surface change density, in micro coulombs per cm^2
+    sigma /= 10**-6 * (10**2)**2 # in coulombs per Angstrom^2
+    theta = 0.8 # fraction phosphate charge neutralised by adsorbed counterions
+    f1, f2, f3 = 0.7, 0.3, 0 # fraction of counterions on; double heix minor groove, major groove, phosphate backbone
+    debye = 7 * 10**-10 # Debye length (kappa^-1), in Angstroms
+    H = 34 * 10**-10 # Helical pitch, in Angstroms
+    lamb_c = 100 * 10**-10 # helical coherence length, in Angstroms. NOTE: more recent estimate NOT from afformentioned paper
+
+    def __init__(self, homol=False):
+        self.homol = homol     
+        
+    def kappa(self, n):
+        return np.sqrt( 1/self.debye**2  +  n**2 * (2*np.pi / self.H)**2 ) # when n=0 kappa = 1/debye
+        
+    def f(self, n):
+        return self.f1 * self.theta  +  self.f2 * (-1)**n * self.theta  -  (1 - self.f3*self.theta) * np.cos(0.4 * n * np.pi)    
+
+    def nu(self, n, L):
+        x = n**2 * L / self.lamb_c
+        return ( 1 - np.exp(-x) ) / x 
+
+    def gen_energy_map(self):
+        ''' 
+        INPUTS:
+        homol : bool , controls output for homologous and non homologous sequences, default = False.
+        
+        OUTPUT:
+        Eint  : 2D np.array, electrostatic internal energy contribution, function of L & R.
+                for homol = False -- NON homologous interaction (default)
+                for homol = True  -- HOMOLOGOUS interaction
+        '''
+        Lmin = 20  * 10**-10
+        Lmax = 300 * 10**-10
+        Lstep = 20 * 10**-10 # grain diameter
+        Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
+    
+        Rmin = 0.9 * 10**-10
+        Rmax = 10 * 10**-10 # same as R_cut = 0.1 * 100*10**-10
+        Rstep = 0.01 * 10**-10
+        Rrange = np.linspace( Rmin, Rmax, int((Rmax-Rmin)/(Rstep))+1 )
+        
+        Lrange, Rrange = np.meshgrid(Lrange, Rrange)
+        self.Lrange = Lrange
+        self.Rrange = Rrange
+        
+        self.coeffs = 16 * np.pi**2 * self.sigma**2 / self.eps
+        a0_coeff = 1/2
+        a0_term1 = (1-self.theta)**2 * special.kn(0, Rrange/self.debye ) / ( (1/self.debye**2) * special.kn(1, self.r/self.debye )**2 )
+        a0_term2 = 0
+        for j in range(-1,2):
+            for n in range(-1,2):
+                a0_term2 += self.f(n)**2 / self.kappa(n)**2  *  special.kn(n-j, self.kappa(n)*Rrange)**2 * special.ivp(j, self.kappa(n)*self.r)  /  (  special.kvp(n, self.kappa(n)*self.r)**2 * special.kvp(j, self.kappa(n)*self.r)  ) 
+        self.a0 = a0_coeff * (a0_term1 - a0_term2)
+        self.a1 = self.f(1)**2 / self.kappa(1)**2 * special.kn(0, self.kappa(1)*Rrange ) / special.kvp(1, self.kappa(1)*self.r )**2
+        self.a2 = self.f(2)**2 / self.kappa(2)**2 * special.kn(0, self.kappa(2)*Rrange ) / special.kvp(2, self.kappa(2)*self.r )**2
+
+        if not self.homol:
+            self.Eint = self.coeffs * ( self.a0  -  self.nu(1, Lrange) * self.a1 * np.cos(np.arccos(self.a1/(4*self.a2)))  +  self.nu(2, Lrange) * self.a2 * np.cos(2*np.arccos(self.a1/(4*self.a2))) ) * Lrange
+        elif self.homol:
+            self.Eint = self.coeffs * ( self.a0  -  self.a1*np.cos(np.arccos(self.a1/(4*self.a2)))  +  self.a2*np.cos(2*np.arccos(self.a1/(4*self.a2))) ) * Lrange
+        
+        self.Eint *= (4*np.pi*epsilon_0)
+        self.Eint /= (Boltzmann * 300) 
+        self.Eint *= 10**8 # from gaussian to in kbT units
+
+    def find_energy(self, Lindex: int, R: float):
+        '''Finds energy of ONE L, R point'''
+        
+        Lmin = 20  * 10**-10
+        Lmax = 100000 * 10**-10
+        Lstep = 20 * 10**-10 # grain diameter
+        Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
+        L = Lrange[Lindex-1]
+        
+        coeffs = 16 * np.pi**2 * self.sigma**2 / self.eps
+        a0_coeff = 1/2
+        a0_term1 = (1-self.theta)**2 * special.kn(0, R/self.debye ) / ( (1/self.debye**2) * special.kn(1, self.r/self.debye )**2 )
+        a0_term2 = 0
+        for j in range(-1,2):
+            for n in range(-1,2):
+                a0_term2 += self.f(n)**2 / self.kappa(n)**2  *  special.kn(n-j, self.kappa(n)*R)**2 * special.ivp(j, self.kappa(n)*self.r)  /  (  special.kvp(n, self.kappa(n)*self.r)**2 * special.kvp(j, self.kappa(n)*self.r)  ) 
+        a0 = a0_coeff * (a0_term1 - a0_term2)
+        a1 = self.f(1)**2 / self.kappa(1)**2 * special.kn(0, self.kappa(1)*R ) / special.kvp(1, self.kappa(1)*self.r )**2
+        a2 = self.f(2)**2 / self.kappa(2)**2 * special.kn(0, self.kappa(2)*R ) / special.kvp(2, self.kappa(2)*self.r )**2
+
+        if not self.homol:
+            Eint = coeffs * ( a0  -  self.nu(1, L) * a1 * np.cos(np.arccos(a1/(4*a2)))  +  self.nu(2, L) * a2 * np.cos(2*np.arccos(a1/(4*a2))) ) * L
+        elif self.homol:
+            Eint = coeffs * ( a0  -  a1*np.cos(np.arccos(a1/(4*a2)))  +  a2*np.cos(2*np.arccos(a1/(4*a2))) ) * L
+        
+        Eint *= (4*np.pi*epsilon_0)
+        Eint /= (Boltzmann * 300) 
+        Eint *= 10**8 # from gaussian to in kbT units
+        
+        return Eint
+
+    def force(self, Lindex: int, R: float):
+        '''         
+        INPUTS:
+        Lindex: int  , index of truncated grain pairing interaction, one unit is 0.2 lamb_c. NOTE: can be a numpy array (1D)
+        R     : float, inter-grain separation.
+        
+        OUTPUT:
+        Force  : float, magnitude (including +-) of electrostatic interaction
+                 negative gradient of energy with respect to separation, R 
+        '''
+        h = 0.0001 * 10**-10 # for differentiation by first principles
+        dEdR = ( self.find_energy(Lindex, R+h) - self.find_energy(Lindex, R) ) / h
+        
+        return -1*dEdR
+        
+    def plot_energy_map(self):
+        '''Must be used after gen_energy_map()'''
+        x, y = self.Lrange, self.Rrange
+        z = self.Eint
+        
+        # Create a new figure for the 3D plot
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot the surface
+        surf = ax.plot_surface(x, y, z, cmap='viridis', alpha=0.7)
+        
+        # Add a color bar which maps values to colors
+        fig.colorbar(surf)
+        
+        # limits
+        #ax.set_xlim([np.min(x), np.max(x)])
+        #ax.set_ylim([np.min(y), np.max(y)])
+        
+        # Set labels
+        ax.set_xlabel('L (m)')
+        ax.set_ylabel('R (m)')
+        ax.set_zlabel('Eint (kbT)')
+        
+        # Show the plot
+        plt.show()
+
+# Pairing interaction energy
+elstats = Electrostatics(homol=False)
+
+
 
 class Grain():
     def __init__(self, position: np.array, velocity: np.array, radius = 0.1):
@@ -84,19 +235,13 @@ class Grain():
     def copy(self):
         return Grain(self.position, self.velocity, self.radius)
     
-    def overlap(self, other) -> tuple([bool, float]):
-        inter_vector = self.position - other.position
-        dist = np.linalg.norm(inter_vector)
-        equilib = self.radius + other.radius + 0.01
-        return dist <= equilib, dist, inter_vector
-
-
 class Strand:
+    
     def __init__(self, grains):
         self.dnastr = grains
         self.num_segments = len(grains)
-        self.interactivity = []
-        self.identities = []
+        self.isinteract = np.zeros(self.num_segments)==np.ones(self.num_segments)
+        self.interactions = []
             
     def copy(self):
         return (Strand(grains = self.dnastr))
@@ -112,29 +257,8 @@ class Strand:
             force = force_magnitude * force_direction
             self.dnastr[i].update_velocity(force, 1)
             self.dnastr[i+1].update_velocity(-force, 1)
-            #print(' bond force:  ',force)
-    
-    # for excluded volume interactions
-    def f_excvol(self, other):
-        for i, j in combinations(range(len(self.dnastr+other.dnastr)),2):
-            if abs(i-j) == 1 and i in [self.num_segments-1,self.num_segments] and j in [self.num_segments-1,self.num_segments]: # ignoring nearest neighbours in excluded volume interactions
-                continue # skips particular i, j
-            igrain = self.dnastr[i] if i<self.num_segments else other.dnastr[i-self.num_segments] 
-            jgrain = self.dnastr[j] if j<self.num_segments else other.dnastr[j-self.num_segments] # use correct strand
-            r = jgrain.position - igrain.position
-            r_norm = np.linalg.norm(r)
-            if r_norm < sigma and r_norm != 0:
-                # Lennard-Jones potential (repulsive part)
-                force_magnitude = 24 * epsilon * (sigma / (r_norm + sigma))**6 / (r_norm + sigma) # Soft core parameter to avoid divergence, 1 kbT for cores overlap
-                force_direction = r / r_norm
-                force = force_magnitude * force_direction
-                #self.dnastr[i].update_velocity(-force, 1) if i<self.num_segments else self.dnastr[i-self.num_segments].update_velocity(-force, 1)
-                #self.dnastr[j].update_velocity( force, 1) if j<self.num_segments else self.dnastr[j-self.num_segments].update_velocity( force, 1)
-                igrain.update_velocity(-force, dt)
-                jgrain.update_velocity( force, dt)
-                #print(' excvol force:',force)
                 
-    # WLC bending forces
+    # WLC bending energies
     def f_wlc(self):
         for i in range(1, self.num_segments - 1):
             # Vectors between adjacent grains
@@ -154,7 +278,6 @@ class Strand:
             self.dnastr[i-1].update_velocity(-torque, dt)
             self.dnastr[i].update_velocity(torque, dt)
             self.dnastr[i+1].update_velocity(-torque, dt)
-            #print(' wlc torque:  ',torque)
         
     def find_angle(self, seg_index):
         p1 = self.dnastr[seg_index-1].position
@@ -166,153 +289,91 @@ class Strand:
             return 0
         # return 180 - angle
         return np.pi - np.arccos(np.dot(p3-p2,p1-p2) / (np.linalg.norm(p3-p2)*np.linalg.norm(p1-p2) ) )
-    
-    # for conditional electrostatic interaction
-    def count_adj_same(self, index: int, identify=False) -> int:
-        '''
-        For an index, counts number of paired segments within the same DNA strand.
-        Considering ALL adjacent sites, otherwise count does not work.
-        '''
-        count = 0 # will NOT count self and neighbours
-        identity = []
-        for bi in range(self.num_segments):
-            if abs(bi-index) > 1:
-                count += 1 if self.dnastr[index].overlap(self.dnastr[bi])[0] else 0
-                if identify:
-                    identity += ['s'+str(bi)]
-        return count, identity
-    
-    def count_adj_other(self, selfindex, other, identify=False) -> int:
-        '''
-        For an index, counts number of paired segments with the other DNA strand.
-        For single specified segment only.
-        '''
-        count = 0 # WILL not count self and neighbours
-        identity = []
-        for bi in range(self.num_segments):
-            if abs(bi-selfindex) > 1:
-                count += 1 if self.dnastr[selfindex].overlap(other.dnastr[bi])[0] else 0
-                if identify:
-                    identity += ['o'+str(bi)]
-        return count, identity
-    
-    def count_all(self, strand1, strand2) -> tuple([int, int, int]):
-        '''Counts ALL pairings across strands, with any input strand - allowing use for provisional'''
-        count_other = 0
-        for b1 in strand1.dnastr:
-            for b2 in strand2.dnastr:
-                count_other += 1 if b1.overlap(b2)[0] else 0
-        count_same = 0
-        for i, j in combinations(range(self.num_segments),2):
-            if abs(i-j) == 1:
-                continue
-            count_same += 1 if strand1.dnastr[i].overlap(strand1.dnastr[j])[0] else 0
-            count_same += 1 if strand2.dnastr[i].overlap(strand2.dnastr[i])[0] else 0
-        return count_other + count_same, count_other, count_same
-    
-    def condition_interactivity(self, other, fororbac: int, first: bool, seg_index: int, num = 0) -> Tuple[int]:
-        '''Defines an interaction as attractive (-1) if it is 'standalone', otherwise repulsive (1) or no interaction (0)
-        '''
-        count_s, identity_s = self.count_adj_same(seg_index)
-        count_o, identity_o = self.count_adj_other(seg_index, other)
-        count = count_s + count_o
-        identities = identity_s + identity_o
-        if first:
-            if count > num:
-                return [1],identities
-            else:
-                return [0],identities
-    
-        if count > num and abs(self.interactivity[fororbac]) == 0:
-            return [1],identities
-        elif count > num and abs(self.interactivity[fororbac]) != 0: 
-            return [abs(self.interactivity[fororbac])+1], identities
-        else:
-            return [0], identities
         
-    def gen_interactivity(self, other) -> list:
+    def find_interactions(self, other) -> list:
         '''
         Generates from 0th Bead, electrostatic interaction counted for whole Strand
-        Does for BOTH strands
-        '''
-        self.interactivity,  self.identities  = self.condition_interactivity(other, 0, True, 0, 0)
-        other.interactivity, other.identities = other.condition_interactivity(self, 0, True, 0, 0)
-        for seg_index in range(1,self.num_segments): # from index+1 to penultimate
-            inter, iden = self.condition_interactivity(other, -1, False, seg_index, 0) # forward
-            self.interactivity += inter
-            self.identities += [iden]
-            inter, iden = other.condition_interactivity(self, -1, False, seg_index, 0)
-            other.interactivity += inter
-            other.identities += [iden]
+        Does for BOTH strands, interactions attribute for StrandA contains ALL information for BOTH strands
         
-    def gen_interactivity_homol(self, other):
-        '''For homologous strands, must be used after "gen_interactivity" to overwrite non-homol interactions '''
+        CHANGE: loop through a COMBINATIONS loop to speed up
+        '''
+        self.interactions = [ [[],[]] ] # starting with one empty 'island'
+        # loop through all combinations
         for i, j in combinations(range(len(self.dnastr+other.dnastr)),2):
-            # rescale i, j
-            inew = i if i>self.num_segments else i-self.num_segments
-            jnew = j if j>self.num_segments else j-self.num_segments
-            # use correct strand
-            igrain = self.dnastr[i] if i<self.num_segments else other.dnastr[inew] 
-            jgrain = self.dnastr[j] if j<self.num_segments else other.dnastr[jnew]
-            if abs(inew-jnew) <= 15 and igrain.overlap(jgrain)[0]: # homologous recognition funnel
-                self.interactivity[inew] = homologous_pair_interaction/abs(inew-jnew) if i < self.num_segments else self.interactivity[inew]
-                other.interactivity[inew] = homologous_pair_interaction/abs(inew-jnew) if i > self.num_segments else other.interactivity[inew]
-                self.interactivity[jnew] = homologous_pair_interaction/abs(inew-jnew) if j < self.num_segments else self.interactivity[jnew]
-                other.interactivity[jnew] = homologous_pair_interaction/abs(inew-jnew) if j > self.num_segments else other.interactivity[jnew]
-        
-    def apply_interactivity(self, other, pindex):
-        '''
-        Auxillary function for f_elstat(), applies the veloctities for grains backwards from peak
-        NOTE: may be faster just to use a loop of all combinations
-        '''
-        for i in range(pindex, pindex-self.interactivity[pindex], -1): # looking backwards
-                for n in self.identities[i]:
-                    felstat = -1 if self.interactivity[i] <= 5 else +1 # attractive if within helical coherence length
-                    # identities provides the information of each strand and index for the vector
-                    fvec = self.dnastr[i].overlap(self.dnastr[int(self.identities[i][n][1])])[3] if self.identities[i][n][0] == 's' else self.dnastr[i].overlap(other.dnastr[int(self.identities[i][n][1])])[3]
-                    self.dnastr[i].update_velocity(felstat*fvec,dt)
-        if self.interactivity[-1] != [0]: # final list element, will be missed by scipy.signal.find_peaks()
-            for i in range(pindex, pindex-self.interactivity[-1], -1):
-                for n in self.identities[i]:
-                    felstat = -kb*300 if self.interactivity[i] <= 5 else +kb*300 # attractive if within helical coherence length
-                    # identities provides the information of each strand and index for the vector
-                    fvec = self.dnastr[i].overlap(self.dnastr[int(self.identities[i][n][1])])[3] if self.identities[i][n][0] == 's' else self.dnastr[i].overlap(other.dnastr[int(self.identities[i][n][1])])[3]
-                    force = felstat * fvec * 300 # put in kb (not kbT) for comparison with f_wlc
-                    self.dnastr[i].update_velocity(force,dt)
-                    #print(' elstat force:',felstat*fvec)
-                    
-    
+            if abs(i-j) <= self_interaction_limit: #and [self.num_segments-1, self.num_segments] not in [ [i,j] , [j,i] ]:
+                continue # skips particular i, j if a close self interaction, avoiding application across strands
+            igrain = self.dnastr[i] if i<self.num_segments else other.dnastr[i-self.num_segments] 
+            jgrain = self.dnastr[j] if j<self.num_segments else other.dnastr[j-self.num_segments] # use correct strand
+            R = jgrain.position - igrain.position
+            R_norm = np.linalg.norm(R) - 0.2 # get surface - surface distance
+            if R_norm < R_cut and R_norm != 0: # update dists attribute
+                # find correct identities
+                idnti = 's'+str(i) if i < self.num_segments else 'o'+str(i-self.num_segments)
+                idntj = 's'+str(j) if j < self.num_segments else 'o'+str(j-self.num_segments)
+                # add to interactions
+                # check if add to any existing 'islands'
+                island = self.find_island(idnti, idntj)
+                if island != 'new':
+                    self.interactions[island][0].append(idnti+' '+idntj)
+                    self.interactions[island][1].append(R_norm)
+                else:
+                    self.interactions.append([[],[]]) # create new island
+                    self.interactions[-1]    [0].append(idnti+' '+idntj)
+                    self.interactions[-1]    [1].append(R_norm)
+                
+    def find_island(self, idnti, idntj):
+        # check if add to any existing 'islands'
+        # create list of possible configurations for an 'island'
+        check_island_configurations = []
+        for stepi in range(-1,2): # can change this for larger loops until interaction 'reset'
+            for stepj in range(-1,2):
+                check_island_configurations += [idnti[0]+str( int(idnti[1:])+stepi ) + ' ' +  idntj[0]+str( int(idntj[1:])+stepj )]
+        # check possible configurations against existing islands
+        for n in range(len(self.interactions)):
+            for check_idnt in check_island_configurations:
+                if check_idnt in self.interactions[n][0]:
+                    return n
+        return 'new'
+                
+    def assign_L(self, other):
+        for isle in self.interactions:
+            # arrange in order ?
+            if isle != [[],[]]:
+                leading = np.argmin(isle[1])
+                Llist = [1]
+                for i in range(2, leading+2): # backwards from leading-1 to index 0
+                    Llist = [i] + Llist
+                for i in range(2, len(isle[0])-leading+1): # forwards from leading + 1
+                    Llist += [i]
+                isle.append(Llist)
+            else:
+                isle.append([])
+            
     def f_elstat(self, other, homol=False):
-        # find each interacting segment from start to end
-        # apply attraction or repulsion to all (based off gradient of non homologous energy) ?
-        # OR choose attractive grain, repel all others by increasing amount ?
-        # INCLUDE variation by distance - like trunctated LJ force - cutoff VS particle size??
-        # NOTE: if cutoff is significantly larger, increase num for counting pairs
-        # -delE of function from recent paper
         ''' '''
-        self.gen_interactivity(other)
-        if homol:
-            self.gen_interactivity_homol(other)
-        # for self strand
-        for p in signal.find_peaks(self.interactivity)[0]: # much shorter loop
-            self.apply_interactivity(other, p)
-        # for other strand
-        for p in signal.find_peaks(other.interactivity)[0]:
-            other.apply_interactivity(self, p)
+        self.find_interactions(other)
+        self.assign_L(other)
+
+        for isle in self.interactions:
+            for i in range(len(isle[0])):
+                felstat = elstats.force(isle[2][i], isle[1][i]*10**-8) # change to metres
+                # identify relevant grains
+                idnt1 = isle[0][i].split(' ')[0]
+                idnt2 = isle[0][i].split(' ')[1]
+                grain1 = self.dnastr[ int(idnt1[1:]) ] if idnt1[0]=='s' else other.dnastr[ int(idnt1[1:]) ]
+                grain2 = self.dnastr[ int(idnt2[1:]) ] if idnt2[0]=='s' else other.dnastr[ int(idnt2[1:]) ]
+                fvec = grain2.position - grain1.position
+                fvec /= np.linalg.norm(fvec) if np.linalg.norm(fvec) != 0 else 1
+                grain1.update_velocity(+1*felstat*fvec,dt)
+                grain2.update_velocity(-1*felstat*fvec,dt)
         
     # for energies, not including bond springs or translational energy
     def eng_elstat(self, other, homol=False):
-        '''Does electrostatic energy of BOTH strands, avoids lengthy loops of eng_elec_old'''
-        self.gen_interactivity(other)
-        if homol:
-            self.gen_interactivity_homol(other)
+        '''
+        Does electrostatic energy of BOTH strands
+        In each step, use after f_elstat() so gen functions do not have to be repeated, homol argument in f_elstat() defines homologicity
+        '''
         energy = 0
-        for i in signal.find_peaks(self.interactivity)[0]: # much shorter loop
-            energy += nonhomolfunc[self.interactivity[i]]
-        energy += nonhomolfunc[self.interactivity[-1]] # SciPy will miss any final
-        for i in signal.find_peaks(other.interactivity)[0]: # much shorter loop
-            energy += nonhomolfunc[other.interactivity[i]]
-        energy += nonhomolfunc[other.interactivity[-1]] # SciPy will miss any final
         return energy
         
     def eng_elastic(self) -> float:
@@ -332,6 +393,7 @@ class Strand:
         for g in self.dnastr:
             av += g.position
         return av
+    
     
     
 class Simulation:
@@ -354,7 +416,6 @@ class Simulation:
         self.apply_langevin_dynamics()
         self.StrandA.f_bond(), self.StrandB.f_bond()
         self.StrandA.f_wlc(), self.StrandB.f_wlc() 
-        self.StrandA.f_excvol(self.StrandB)
         self.StrandA.f_elstat(self.StrandB)
         self.apply_box()
         self.update_positions()
@@ -367,11 +428,9 @@ class Simulation:
             # apply drag, using 'trick' dt=1 to rescale velocity fully
             grain.update_velocity(damping_force, 1)
             # Random thermal force
-            random_force = np.random.normal(0, np.sqrt(2 * lamb * kb * temp), size=3) #/dt
+            random_force = np.random.normal(0, np.sqrt(2 * lamb * kb * temp / dt), size=3)
             # Damping force
             grain.update_velocity(random_force,dt)
-            #print(' drag force:   ',damping_force)
-            #print(' rand force:   ',random_force)
             
     def apply_box(self):
         for grain in self.StrandA.dnastr + self.StrandB.dnastr:
@@ -413,11 +472,17 @@ class Simulation:
     def count_tot(self):
         '''Discounts immediate neighbours from pairs
         Must be run only after gen_interactivity'''
-        comparearray = np.zeros(len(self.StrandA.interactivity))
-        pairsA = np.sum(np.array(self.StrandA.interactivity)!=comparearray)
-        pairsB = np.sum(np.array(self.StrandB.interactivity)!=comparearray)
-        totpairs = int((pairsA+pairsB)/2)
-        return totpairs, abs(pairsA - pairsB)  
+        #comparearray = np.zeros(len(self.StrandA.interactivity))
+        #pairsA = np.sum(np.array(self.StrandA.interactivity)!=comparearray)
+        #pairsB = np.sum(np.array(self.StrandB.interactivity)!=comparearray)
+        #totpairs = int((pairsA+pairsB)/2)
+        count_total = 0
+        count_pairs = 0
+        for isle in self.StrandA.interactions:
+            count_total += len(isle[0])
+            for i in range(len(isle[0])):
+                count_pairs += 1 if isle[0][i][0]==isle[0][i][4] else 0
+        return count_total, count_pairs  
           
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
