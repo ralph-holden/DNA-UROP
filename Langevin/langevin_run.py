@@ -18,12 +18,12 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 1
+nsteps = 5000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 20
+coherence_lengths = 5
 ystart = -coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 0.7
+sep = 1
 sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
@@ -35,7 +35,7 @@ save_data = False
 log_update = 50 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 50 # frame dump frequency
+frame_hop = 10 # frame dump frequency
 
 # # # INITIALISE & RUN SIMULATION # # #
 Strand1 = Strand(gen_grains(coherence_lengths,[xstartA,ystart,0]))
@@ -50,8 +50,11 @@ logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message
 logging.info('Simulation started')
 
 for i, item in enumerate(range(nsteps)):
+    #k_spring = 10000*kb
     sim.run_step()
-        
+    
+    #k_spring /= 1.1
+    
     length = 20
     progress = (i + 1) / nsteps
     bar_length = int(length * progress)
@@ -191,7 +194,7 @@ if animate:
     ani = FuncAnimation(fig, update, frames=num_frames, interval=400, blit=False)
     
     # Save the animation as an MP4 file (uncomment to save)
-    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=5))
+    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=10))
     
     logging.info('Animation saved as GIF')
     
