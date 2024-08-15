@@ -12,7 +12,6 @@ MODEL:
 CODE & SIMULATION:
     Langevin dynamics (a Monte Carlo method) used to propagate each grain in the dsDNA strands
     Additional forces involved are; 
-        a truncated LJ potential for excluded volume effects
         harmonic grain springs for keeping the strand intact (artifical 'fix')
         harmonic angular springs for the worm like chain
         conditional electrostatic interactions as described in Kornyshev-Leikin theory
@@ -28,7 +27,6 @@ NOTE: architecture improvement may involve changing some functions to take speci
 from itertools import combinations
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import signal
 from typing import Tuple
 from scipy import special
 from scipy.constants import epsilon_0, Boltzmann
@@ -52,8 +50,8 @@ self_interaction_limit = 5 # avoid interactions between grains in same strand
 homology_set = False
 
 # Langevin 
-lamb = 1 # damping coefficient
-dt = 0.0005 # timestep
+lamb = 0.25 # damping coefficient
+dt = 0.0001 # timestep
 
 
 
@@ -82,7 +80,8 @@ class Electrostatics:
     debye = 7 * 10**-10 # Debye length (kappa^-1), in Angstroms
     H = 34 * 10**-10 # Helical pitch, in Angstroms
     lamb_c = 100 * 10**-10 # helical coherence length, in Angstroms. NOTE: more recent estimate NOT from afformentioned paper
-
+    coeffs = 16 * np.pi**2 * sigma**2 / eps # coefficients for 'a' terms, apply at end of calculations, for Eint. NOTE: requires a0 to have a prefactor of 1/2
+    
     def __init__(self, homol=False):
         self.homol = homol     
         
@@ -95,6 +94,26 @@ class Electrostatics:
     def nu(self, n, L):
         x = n**2 * L / self.lamb_c
         return ( 1 - np.exp(-x) ) / x 
+    
+    def a(self, R: float) -> tuple([float, float, float]):
+        '''
+        Finds 'a' terms for a_0, a_1, a_2 @ R
+        For a_0 term, pairwise sum from -inf to +inf approximated as -1 to 1 (including zero)
+        For gen_energy_map(), R input can be array
+        
+        NOTE: w/out coeff factor, applied only @ Eint calculation, a0 has a prefactor of 1/2
+        '''
+        a0_coeff = 1/2
+        a0_term1 = (1-self.theta)**2 * special.kn(0, R/self.debye ) / ( (1/self.debye**2) * special.kn(1, self.r/self.debye )**2 )
+        a0_term2 = 0
+        for j in range(-1,2):
+            for n in range(-1,2):
+                a0_term2 += self.f(n)**2 / self.kappa(n)**2  *  special.kn(n-j, self.kappa(n)*R)**2 * special.ivp(j, self.kappa(n)*self.r)  /  (  special.kvp(n, self.kappa(n)*self.r)**2 * special.kvp(j, self.kappa(n)*self.r)  ) 
+        a0 = a0_coeff * (a0_term1 - a0_term2)
+        a1 = self.f(1)**2 / self.kappa(1)**2 * special.kn(0, self.kappa(1)*R ) / special.kvp(1, self.kappa(1)*self.r )**2
+        a2 = self.f(2)**2 / self.kappa(2)**2 * special.kn(0, self.kappa(2)*R ) / special.kvp(2, self.kappa(2)*self.r )**2
+
+        return a0, a1, a2
 
     def gen_energy_map(self):
         ''' 
@@ -120,16 +139,7 @@ class Electrostatics:
         self.Lrange = Lrange
         self.Rrange = Rrange
         
-        self.coeffs = 16 * np.pi**2 * self.sigma**2 / self.eps
-        a0_coeff = 1/2
-        a0_term1 = (1-self.theta)**2 * special.kn(0, Rrange/self.debye ) / ( (1/self.debye**2) * special.kn(1, self.r/self.debye )**2 )
-        a0_term2 = 0
-        for j in range(-1,2):
-            for n in range(-1,2):
-                a0_term2 += self.f(n)**2 / self.kappa(n)**2  *  special.kn(n-j, self.kappa(n)*Rrange)**2 * special.ivp(j, self.kappa(n)*self.r)  /  (  special.kvp(n, self.kappa(n)*self.r)**2 * special.kvp(j, self.kappa(n)*self.r)  ) 
-        self.a0 = a0_coeff * (a0_term1 - a0_term2)
-        self.a1 = self.f(1)**2 / self.kappa(1)**2 * special.kn(0, self.kappa(1)*Rrange ) / special.kvp(1, self.kappa(1)*self.r )**2
-        self.a2 = self.f(2)**2 / self.kappa(2)**2 * special.kn(0, self.kappa(2)*Rrange ) / special.kvp(2, self.kappa(2)*self.r )**2
+        self.a0, self.a1, self.a2 = self.a(Rrange)
 
         if not self.homol:
             self.Eint = self.coeffs * ( self.a0  -  self.nu(1, Lrange) * self.a1 * np.cos(np.arccos(self.a1/(4*self.a2)))  +  self.nu(2, Lrange) * self.a2 * np.cos(2*np.arccos(self.a1/(4*self.a2))) ) * Lrange
@@ -138,7 +148,7 @@ class Electrostatics:
         
         self.Eint *= (4*np.pi*epsilon_0)
         self.Eint /= (Boltzmann * 300) 
-        self.Eint *= 10**8 # from gaussian to in kbT units
+        #self.Eint *= 10**8 # from gaussian to in kbT units
 
     def find_energy(self, Lindex: int, R: float):
         '''Finds energy of ONE L, R point'''
@@ -149,25 +159,38 @@ class Electrostatics:
         Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
         L = Lrange[Lindex-1]
         
-        coeffs = 16 * np.pi**2 * self.sigma**2 / self.eps
-        a0_coeff = 1/2
-        a0_term1 = (1-self.theta)**2 * special.kn(0, R/self.debye ) / ( (1/self.debye**2) * special.kn(1, self.r/self.debye )**2 )
-        a0_term2 = 0
-        for j in range(-1,2):
-            for n in range(-1,2):
-                a0_term2 += self.f(n)**2 / self.kappa(n)**2  *  special.kn(n-j, self.kappa(n)*R)**2 * special.ivp(j, self.kappa(n)*self.r)  /  (  special.kvp(n, self.kappa(n)*self.r)**2 * special.kvp(j, self.kappa(n)*self.r)  ) 
-        a0 = a0_coeff * (a0_term1 - a0_term2)
-        a1 = self.f(1)**2 / self.kappa(1)**2 * special.kn(0, self.kappa(1)*R ) / special.kvp(1, self.kappa(1)*self.r )**2
-        a2 = self.f(2)**2 / self.kappa(2)**2 * special.kn(0, self.kappa(2)*R ) / special.kvp(2, self.kappa(2)*self.r )**2
+        a0, a1, a2 = self.a(R)
 
+        SP_min_factor = np.cos(np.arccos(np.clip(a1/(4*a2), -1, 1))) if abs(a2) > 10**-10 else np.cos(np.pi) # avoid dividing by zero error
+        
         if not self.homol:
-            Eint = coeffs * ( a0  -  self.nu(1, L) * a1 * np.cos(np.arccos(a1/(4*a2)))  +  self.nu(2, L) * a2 * np.cos(2*np.arccos(a1/(4*a2))) ) * L
+            Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
         elif self.homol:
-            Eint = coeffs * ( a0  -  a1*np.cos(np.arccos(a1/(4*a2)))  +  a2*np.cos(2*np.arccos(a1/(4*a2))) ) * L
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * L
+            
+        Eint *= (4*np.pi*epsilon_0)
+        Eint /= (Boltzmann * 300) # from gaussian to in kbT units
+        #Eint *= 10**8 # for factor of L[m] to L[l_c]
+        
+        return Eint
+    
+    def find_energy_fc(self, L: float, R: float):
+        '''
+        Finds energy of ONE L, R point with fully continuous (fc) inputs 
+        For use in find_force(), where dE/dRdL required
+        '''
+        a0, a1, a2 = self.a(R)
+        
+        SP_min_factor = np.cos(np.arccos(np.clip(a1/(4*a2), -1, 1))) if abs(a2) > 10**-10 else np.cos(np.pi) # avoid dividing by zero error
+        
+        if not self.homol:
+            Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
+        elif self.homol:
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * L
         
         Eint *= (4*np.pi*epsilon_0)
-        Eint /= (Boltzmann * 300) 
-        Eint *= 10**8 # from gaussian to in kbT units
+        Eint /= (Boltzmann * 300) # from gaussian to in kbT units
+        #Eint *= 10**8 # for factor of L[m] to L[l_c]
         
         return Eint
 
@@ -181,10 +204,17 @@ class Electrostatics:
         Force  : float, magnitude (including +-) of electrostatic interaction
                  negative gradient of energy with respect to separation, R 
         '''
-        h = 0.0001 * 10**-10 # for differentiation by first principles
-        dEdR = ( self.find_energy(Lindex, R+h) - self.find_energy(Lindex, R) ) / h
+        Lmin = 20  * 10**-10
+        Lmax = 100000 * 10**-10
+        Lstep = 20 * 10**-10 # grain diameter
+        Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
+        L = Lrange[Lindex-1]
         
-        return -1*dEdR
+        h = 0.0001 * 10**-10 # for differentiation by first principles
+        # mixed differentiation by first principles, NOTE: could use analytical derivative to save computational cost
+        dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
+        
+        return -1*dE_dRdL
         
     def plot_energy_map(self):
         '''Must be used after gen_energy_map()'''
@@ -236,6 +266,8 @@ class Grain():
     def copy(self):
         return Grain(self.position, self.velocity, self.radius)
     
+    
+    
 class Strand:
     
     def __init__(self, grains):
@@ -251,9 +283,8 @@ class Strand:
                 if j >= self.num_segments:
                     self.cross_list.append([i,j]) 
                     
-        # Gives list of repetitions
+        # Gives list of repetitions ***OUTDATED***
         self.repetitions = [ [],[] ]
-        
         
     def copy(self):
         return (Strand(grains = self.dnastr))
@@ -306,11 +337,11 @@ class Strand:
         '''
         Generates from 0th Bead, electrostatic interaction counted for whole Strand
         Does for BOTH strands, interactions attribute for StrandA contains ALL information for BOTH strands
-        
-        CHANGE: loop through a COMBINATIONS loop to speed up
         '''
-        self.interactions = [ [[],[]] ] # starting with one empty 'island'
-        self.repetitions  = [  [],[]  ]
+        # reset interactions
+        self.interactions = [ [[],[]] ]
+        self.repetitions  = [ [[],[]] ]
+        
         # loop through all combinations
         for i, j in combinations(range(len(self.dnastr+other.dnastr)),2):
             if abs(i-j) <= self_interaction_limit and [i,j] not in self.cross_list:
@@ -319,37 +350,40 @@ class Strand:
             jgrain = self.dnastr[j] if j<self.num_segments else other.dnastr[j-self.num_segments] # use correct strand
             R = jgrain.position - igrain.position
             R_norm = np.linalg.norm(R) - 0.2 # get surface - surface distance
-            if R_norm < R_cut and R_norm != 0: # update dists attribute
-                # find correct identities
+            
+            # if interaction under cutoff distance
+            if R_norm < R_cut and R_norm != 0: 
+                # find IDs
                 idnti = 's'+str(i) if i < self.num_segments else 'o'+str(i-self.num_segments)
                 idntj = 's'+str(j) if j < self.num_segments else 'o'+str(j-self.num_segments)
+                
                 # add to interactions
                 # check if add to any existing 'islands'
                 island = self.find_island(idnti, idntj)
-                island = 0 if len(self.interactions[0][0]) == 0 else island 
-                if type(island) == int:
-                    if idnti+' '+idntj not in self.repetitions[0]: 
-                        # need R_norm requirement 
-                        # if R > R_repetition, do as below, where new interaction ignored
-                        # if R < R_repetition, include as interaction, despite previous
-                        # then need to erase previous interaction from interactions and repetitions
+                island = 0 if len(self.interactions[0][0]) == 0 else island # add to first island
+                
+                # check if BOTH IDs are in ONE other island+repetitions, if so, to ignore 
+                ignore_interaction = self.check_repetition(other, island, idnti, idntj, R_norm)
+                
+                # add ID and R to island (in interactions attribute), and any possible repetitions
+                if not ignore_interaction:
+                    if type(island) == int: 
                         self.interactions[island][0].append(idnti+' '+idntj)
                         self.interactions[island][1].append(R_norm)
-                        self.update_repetitions(other, idnti, idntj, R_norm)
-                elif island == 'new':
-                    if idnti+' '+idntj not in self.repetitions[0]: # need R_norm requirement 
+                    elif island == 'new':
                         self.interactions.append( [[],[]] ) # create new island
                         self.interactions[-1]    [0].append(idnti+' '+idntj)
                         self.interactions[-1]    [1].append(R_norm)
-                        self.update_repetitions(other, idnti, idntj, R_norm)
-        
+                #self.update_repetitions(other, island, idnti, idntj, R_norm)
                 
     def find_island(self, idnti, idntj):
         # check if add to any existing 'islands'
         # create list of possible configurations for an 'island'
         check_island_configurations = []
-        for stepi in [-1,1]: # can change this for larger loops until interaction 'reset'
-            for stepj in [-1,1]:
+        for stepi in range(-self_interaction_limit,self_interaction_limit):
+            for stepj in range(-self_interaction_limit,self_interaction_limit):
+                if int(idnti[1:])+stepi >= self.num_segments or int(idnti[1:])+stepi < 0 or int(idntj[1:])+stepj >= self.num_segments or int(idntj[1:])+stepj < 0:
+                    continue
                 check_island_configurations += [idnti[0]+str( int(idnti[1:])+stepi ) + ' ' +  idntj[0]+str( int(idntj[1:])+stepj )]
         # check possible configurations against existing islands
         for n in range(len(self.interactions)):
@@ -358,26 +392,34 @@ class Strand:
                     return n
         return 'new' 
     
-    def clean_interactions(self, other):
-        '''
-        Removes double interactions from each island
-        Must be run before assign_L()
-        '''
-        pass
+    def check_repetition(self, other, island, idnti, idntj, R_norm) -> bool:
+        ignore_interaction = False
+        if type(island) == int:
+            is_idnti, is_idntj = False, False
+            for i in range(len( self.interactions[island][0] )):
+                is_idnti = True if idnti in self.interactions[island][0][i].split(' ') else is_idnti
+                is_idntj = True if idntj in self.interactions[island][0][i].split(' ') else is_idntj
+                #R_compare = self.interactions[island][1][i]
+            if is_idnti or is_idntj:
+                ignore_interaction = True #if R_compare > R_norm else ignore_interaction
+        return ignore_interaction
     
-    def update_repetitions(self, other, idnti, idntj, R_norm):
-        self.repetitions[0].append(idnti+' '+idntj)
-        self.repetitions[1].append(R_norm)
+    def update_repetitions(self, other, island, idnti, idntj, R_norm):
+        ''' function, along with repetitions attribute no longer used '''
+        if island == 'new':
+            self.repetitions.append( [[],[]] )
+            island = -1
+        self.repetitions[island][0].append(idnti+' '+idntj)
+        self.repetitions[island][1].append(R_norm)
         for n in range(self_interaction_limit):
             for stepi, stepj in [ [-n,0], [0,-n], [n,0], [0,n] ]: # can change this for larger loops until interaction 'reset'
-                if int(idnti[1:])+stepi >= self.num_segments or int(idntj[1:])+stepj >= self.num_segments:
+                if int(idnti[1:])+stepi >= self.num_segments or int(idnti[1:])+stepi < 0 or int(idntj[1:])+stepj >= self.num_segments or int(idntj[1:])+stepj < 0:
                     continue
-                self.repetitions[0] += [idnti[0]+str( int(idnti[1:])+stepi ) + ' ' +  idntj[0]+str( int(idntj[1:])+stepj )]
+                self.repetitions[island][0] += [idnti[0]+str( int(idnti[1:])+stepi ) + ' ' +  idntj[0]+str( int(idntj[1:])+stepj )]
                 
                 g1 = self.dnastr[ int(idnti[1:])+stepi ] if idnti[0] == 's' else other.dnastr[ int(idnti[1:])+stepi ]
                 g2 = self.dnastr[ int(idntj[1:])+stepj ] if idntj[0] == 's' else other.dnastr[ int(idntj[1:])+stepj ]
-                self.repetitions[1] += [ np.linalg.norm( g1.position - g2.position ) - 0.2 ]
-        
+                self.repetitions[island][1] += [ np.linalg.norm( g1.position - g2.position ) - 0.2 ]
                 
     def assign_L(self, other):
         for isle in self.interactions:
@@ -398,7 +440,6 @@ class Strand:
         NOTE: does not yet account for NON homologous interactions for HOMOLOGOUS strands
         '''
         self.find_interactions(other)
-        self.clean_interactions(other)
         self.assign_L(other)
         
         # must only take MOST SIGNIFICANT (closest) interaction for each grain in an interacting 'island'
@@ -423,6 +464,13 @@ class Strand:
         In each step, use after f_elstat() so gen functions do not have to be repeated, homol argument in f_elstat() defines homologicity
         '''
         energy = 0
+        for isle in self.interactions:
+            if isle[1] == [] or isle[2] == []:
+                continue
+            for n in range(len( isle[1] )):
+                g_R = isle[1][n]
+                g_L = isle[2][n]
+                energy +=  elstats.find_energy(g_L, g_R) - elstats.find_energy(g_L-1, g_R) # remove 'built-up' energy over L w/ different R
         return energy
         
     def eng_elastic(self) -> float:
@@ -459,6 +507,7 @@ class Simulation:
         self.energies = []
         self.endtoends = []
         self.centremass = []
+        self.interactions_traj = []
         #self.record()
 
     def run_step(self):
@@ -484,8 +533,9 @@ class Simulation:
     def apply_box(self):
         for grain in self.StrandA.dnastr + self.StrandB.dnastr:
             for i in range(3):
-                grain.velocity[i]*=-1 if abs(grain.position[0]+grain.radius>=self.boxlims[i]) and grain.position[i]*grain.velocity[i]>0 else 1
-
+                grain.velocity[i]*=-1 if abs(grain.position[i]+grain.radius)>=self.boxlims[i] and grain.position[i]*grain.velocity[i]>0 else 1
+        # alternative, particles not allowed to leave box. Will not violate langevin simulation if apply_box() used before velocity updates
+        
     def update_positions(self):
         for grain in self.StrandA.dnastr + self.StrandB.dnastr:
             grain.update_position(dt)
@@ -512,6 +562,10 @@ class Simulation:
         self.endtoends.append(self.endtoend(-1))
         
         #self.centremass.append([self.StrandA.find_centremass(),self.StrandB.find_centremass()])
+        
+        # PROVISIONAL
+        if self.StrandA.interactions != [[[], [], []]]:
+            self.interactions_traj.append(self.StrandA.interactions)
     
     def endtoend(self, tindex):
         endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1]) + 0.2
