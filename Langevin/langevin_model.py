@@ -49,6 +49,7 @@ k_spring = 300*kb  # Spring constant for bonds
 # Simulation Interaction Parameters
 R_cut = 0.75 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms)
 self_interaction_limit = 5 # avoid interactions between grains in same strand
+homology_set = False
 
 # Langevin 
 lamb = 1 # damping coefficient
@@ -59,7 +60,7 @@ dt = 0.0005 # timestep
 # # # Aux functions # # #
 def gen_grains(coherence_lengths, start_position):
     strand = [Grain(start_position, np.zeros(3) )]
-    for i in range(5*coherence_lengths):
+    for i in range(5*coherence_lengths-1):
         strand.append( Grain( strand[-1].position + np.array([0, 0.2, 0]), np.zeros(3) ) )
     return strand
 
@@ -213,7 +214,7 @@ class Electrostatics:
         plt.show()
 
 # Pairing interaction energy
-elstats = Electrostatics(homol=False)
+elstats = Electrostatics(homol = homology_set)
 
 
 
@@ -242,7 +243,18 @@ class Strand:
         self.num_segments = len(grains)
         self.isinteract = np.zeros(self.num_segments)==np.ones(self.num_segments)
         self.interactions = []
-            
+        
+        # Gives list indexes that can break the self interaction lower limit, by interacting ACROSS the strands
+        self.cross_list = [] # defined here as to avoid repetitions. 
+        for i in range(self.num_segments - self_interaction_limit, self.num_segments):
+            for j in range(i, i+self_interaction_limit+1):
+                if j >= self.num_segments:
+                    self.cross_list.append([i,j]) 
+                    
+        # Gives list of repetitions
+        self.repetitions = [ [],[] ]
+        
+        
     def copy(self):
         return (Strand(grains = self.dnastr))
     
@@ -298,9 +310,10 @@ class Strand:
         CHANGE: loop through a COMBINATIONS loop to speed up
         '''
         self.interactions = [ [[],[]] ] # starting with one empty 'island'
+        self.repetitions  = [  [],[]  ]
         # loop through all combinations
         for i, j in combinations(range(len(self.dnastr+other.dnastr)),2):
-            if abs(i-j) <= self_interaction_limit: #and [self.num_segments-1, self.num_segments] not in [ [i,j] , [j,i] ]:
+            if abs(i-j) <= self_interaction_limit and [i,j] not in self.cross_list:
                 continue # skips particular i, j if a close self interaction, avoiding application across strands
             igrain = self.dnastr[i] if i<self.num_segments else other.dnastr[i-self.num_segments] 
             jgrain = self.dnastr[j] if j<self.num_segments else other.dnastr[j-self.num_segments] # use correct strand
@@ -313,27 +326,58 @@ class Strand:
                 # add to interactions
                 # check if add to any existing 'islands'
                 island = self.find_island(idnti, idntj)
-                if island != 'new':
-                    self.interactions[island][0].append(idnti+' '+idntj)
-                    self.interactions[island][1].append(R_norm)
-                else:
-                    self.interactions.append([[],[]]) # create new island
-                    self.interactions[-1]    [0].append(idnti+' '+idntj)
-                    self.interactions[-1]    [1].append(R_norm)
+                island = 0 if len(self.interactions[0][0]) == 0 else island 
+                if type(island) == int:
+                    if idnti+' '+idntj not in self.repetitions[0]: 
+                        # need R_norm requirement 
+                        # if R > R_repetition, do as below, where new interaction ignored
+                        # if R < R_repetition, include as interaction, despite previous
+                        # then need to erase previous interaction from interactions and repetitions
+                        self.interactions[island][0].append(idnti+' '+idntj)
+                        self.interactions[island][1].append(R_norm)
+                        self.update_repetitions(other, idnti, idntj, R_norm)
+                elif island == 'new':
+                    if idnti+' '+idntj not in self.repetitions[0]: # need R_norm requirement 
+                        self.interactions.append( [[],[]] ) # create new island
+                        self.interactions[-1]    [0].append(idnti+' '+idntj)
+                        self.interactions[-1]    [1].append(R_norm)
+                        self.update_repetitions(other, idnti, idntj, R_norm)
+        
                 
     def find_island(self, idnti, idntj):
         # check if add to any existing 'islands'
         # create list of possible configurations for an 'island'
         check_island_configurations = []
-        for stepi in range(-1,2): # can change this for larger loops until interaction 'reset'
-            for stepj in range(-1,2):
+        for stepi in [-1,1]: # can change this for larger loops until interaction 'reset'
+            for stepj in [-1,1]:
                 check_island_configurations += [idnti[0]+str( int(idnti[1:])+stepi ) + ' ' +  idntj[0]+str( int(idntj[1:])+stepj )]
         # check possible configurations against existing islands
         for n in range(len(self.interactions)):
             for check_idnt in check_island_configurations:
-                if check_idnt in self.interactions[n][0]:
+                if check_idnt in self.interactions[n][0]:   
                     return n
-        return 'new'
+        return 'new' 
+    
+    def clean_interactions(self, other):
+        '''
+        Removes double interactions from each island
+        Must be run before assign_L()
+        '''
+        pass
+    
+    def update_repetitions(self, other, idnti, idntj, R_norm):
+        self.repetitions[0].append(idnti+' '+idntj)
+        self.repetitions[1].append(R_norm)
+        for n in range(self_interaction_limit):
+            for stepi, stepj in [ [-n,0], [0,-n], [n,0], [0,n] ]: # can change this for larger loops until interaction 'reset'
+                if int(idnti[1:])+stepi >= self.num_segments or int(idntj[1:])+stepj >= self.num_segments:
+                    continue
+                self.repetitions[0] += [idnti[0]+str( int(idnti[1:])+stepi ) + ' ' +  idntj[0]+str( int(idntj[1:])+stepj )]
+                
+                g1 = self.dnastr[ int(idnti[1:])+stepi ] if idnti[0] == 's' else other.dnastr[ int(idnti[1:])+stepi ]
+                g2 = self.dnastr[ int(idntj[1:])+stepj ] if idntj[0] == 's' else other.dnastr[ int(idntj[1:])+stepj ]
+                self.repetitions[1] += [ np.linalg.norm( g1.position - g2.position ) - 0.2 ]
+        
                 
     def assign_L(self, other):
         for isle in self.interactions:
@@ -350,9 +394,14 @@ class Strand:
                 isle.append([])
             
     def f_elstat(self, other, homol=False):
-        ''' '''
+        ''' 
+        NOTE: does not yet account for NON homologous interactions for HOMOLOGOUS strands
+        '''
         self.find_interactions(other)
+        self.clean_interactions(other)
         self.assign_L(other)
+        
+        # must only take MOST SIGNIFICANT (closest) interaction for each grain in an interacting 'island'
 
         for isle in self.interactions:
             for i in range(len(isle[0])):
@@ -465,8 +514,8 @@ class Simulation:
         #self.centremass.append([self.StrandA.find_centremass(),self.StrandB.find_centremass()])
     
     def endtoend(self, tindex):
-        endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1])
-        endtoendB = np.linalg.norm(self.trajectoryB[tindex][0] - self.trajectoryB[tindex][-1])
+        endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1]) + 0.2
+        endtoendB = np.linalg.norm(self.trajectoryB[tindex][0] - self.trajectoryB[tindex][-1]) + 0.2 # account for size of particle
         return endtoendA, endtoendB
     
     def count_tot(self):
