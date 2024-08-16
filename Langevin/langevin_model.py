@@ -56,6 +56,65 @@ dt = 0.0001 # timestep
 
 
 # # # Aux functions # # #
+class Start_position:
+    
+    def __init__(self, num_segments, xstart, ystart, zstart):
+        # Parameters
+        self.total_points = num_segments # Total number of points (adjust this value as needed)
+        self.points_per_semicircle = int(round(5 * 5)) # 25 points per semicircle
+        self.radius = lp / np.pi # Radius of the semicircles
+        self.num_semicircles = self.total_points // self.points_per_semicircle  # Number of complete semicircles
+    
+        self.xstart = xstart
+        self.ystart = ystart
+        self.zstart = zstart
+    
+        
+    
+    def create_strand_curved(self):
+        # Create arrays for x, y, and z coordinates
+        self.x = []
+        self.y = []
+        self.z = []
+        
+        # Generate the snake curve 
+        for n in range(self.total_points):
+            # Determine the current semicircle number
+            semicircle_num = n // self.points_per_semicircle
+            # Determine the position within the current semicircle
+            theta = (n % self.points_per_semicircle) / self.points_per_semicircle * np.pi
+            m = (-1)**semicircle_num
+            
+            # Calculate x, y, and z based on the current semicircle
+            self.x.append(self.xstart + m * self.radius * np.sin(theta))  # Rotate semicircles by 90 degrees (horizontal)
+            self.y.append(self.ystart + self.radius * np.cos(theta) - semicircle_num * 2 * self.radius)  # Move down vertically
+            self.z.append(0)  # All z-values are zero
+        
+        grains = []
+        for i in range( self.total_points ):
+            xi, yi, zi = self.x[i], self.y[i], self.z[i]
+            grains.append( Grain( [xi, yi, zi], np.zeros(3) ) )
+        
+        return Strand(grains)
+    
+    def create_strand_straight(self):
+        grains = [ Grain( np.array([self.xstart, self.ystart, self.zstart]) , np.zeros(3) ) ]
+        for i in range(self.total_points-1):
+            grains.append( Grain( grains[-1].position + np.array([0, 0.2, 0]), np.zeros(3) ) )
+        return Strand(grains)
+    
+    def plot_start(self):
+        fig = plt.figure(figsize=(10, 6))
+        ax = fig.add_subplot(111, projection='3d')
+    
+        ax.plot(self.x, self.y, self.z, linestyle='', marker='.', markersize=10)
+        ax.set_title("Snake Curve in 3D")
+        ax.set_xlabel('X axis')
+        ax.set_ylabel('Y axis')
+        ax.set_zlabel('Z axis')
+    
+        plt.show()
+
 def gen_grains(coherence_lengths, start_position):
     strand = [Grain(start_position, np.zeros(3) )]
     for i in range(5*coherence_lengths-1):
@@ -507,6 +566,10 @@ class Simulation:
         self.energies = []
         self.endtoends = []
         self.centremass = []
+        self.n_islands = []
+        self.av_R_islands = []
+        self.av_L_islands = [] 
+        self.av_sep_islands = []
         self.interactions_traj = []
         #self.record()
 
@@ -556,14 +619,17 @@ class Simulation:
         
         self.energies.append(self.find_energy())
         
-        totpair, selfpair = self.count_tot()
-        self.pair_counts.append([totpair, selfpair])
-        
         self.endtoends.append(self.endtoend(-1))
         
         #self.centremass.append([self.StrandA.find_centremass(),self.StrandB.find_centremass()])
         
-        # PROVISIONAL
+        totpair, selfpair, n_islands, av_R_islands, av_L_islands, av_sep_islands = self.islands_data()
+        self.pair_counts.append([totpair, selfpair])
+        self.n_islands.append(n_islands)
+        self.av_R_islands.append(av_R_islands)
+        self.av_L_islands.append(av_L_islands)
+        self.av_sep_islands.append(av_sep_islands)
+        
         if self.StrandA.interactions != [[[], [], []]]:
             self.interactions_traj.append(self.StrandA.interactions)
     
@@ -572,22 +638,60 @@ class Simulation:
         endtoendB = np.linalg.norm(self.trajectoryB[tindex][0] - self.trajectoryB[tindex][-1]) + 0.2 # account for size of particle
         return endtoendA, endtoendB
     
-    def count_tot(self):
-        '''Discounts immediate neighbours from pairs
-        Must be run only after gen_interactivity'''
-        #comparearray = np.zeros(len(self.StrandA.interactivity))
-        #pairsA = np.sum(np.array(self.StrandA.interactivity)!=comparearray)
-        #pairsB = np.sum(np.array(self.StrandB.interactivity)!=comparearray)
-        #totpairs = int((pairsA+pairsB)/2)
+    def islands_data(self):
+        '''
+        Finds ALL data concerning interacting 'islands'
+        
+        INPUTS: (implicit)
+            self.StrandA.interactions : list, contains information of ALL interacting pairs
+                                        list[0] - ID strings of each interaction
+                                        list[1] - R, surface-surface distance between each interacting pairs
+                                        list[2] - L, contains length index for each interacting pair, w/ 'LEADING' & Deraguin approx.
+        
+        OUTPUTS:
+            count_total      : int  , total number of interacting pairs
+            count_self_pairs : int  , number of pairs interacting within a strand
+            n_islands        : int  , the number of separate interacting islands
+            av_R_islands     : float, mean separation between pairs across all islands,    in units of l_c
+            av_l_islands     : float, mean length (through strand)  across all islands,    in units of l_c
+            av_sep_islands   : float, mean length (through strand) separating all islands, in units of l_c
+            
+            NOTE: for empty interactions list, output is 
+                  0, 0, 0, None, 0, None
+        '''
+        if self.StrandA.interactions == [[[], [], []]]:
+            return 0, 0, 0, None, 0, None
+        
+        n_islands = len(self.StrandA.interactions) # number of loops / islands
+        
         count_total = 0
         count_pairs = 0
+        av_R_islands = 0
+        start_end_g = [],[]
+        
         for isle in self.StrandA.interactions:
+            
             count_total += len(isle[0])
             for i in range(len(isle[0])):
                 count_pairs += 1 if isle[0][i][0]==isle[0][i][4] else 0
-        return count_total, count_pairs  
+            
+            av_R_islands += np.mean( isle[1] )
+            
+            for i in [0,1]:
+                for j in [0,-1]:
+                    start_end_g[i].append( int( isle[0][j] . split(' ')[i][1:] ) )
+        
+        av_R_islands /= n_islands
+        
+        L_islands    = np.diff( start_end_g ) [:,  ::2] + 1
+        sep_islands  = np.diff( start_end_g ) [:, 1::2] - 1 if len( np.diff( start_end_g ) [:, 1::2] ) != 0 else None
+        av_L_islands   = np.mean( L_islands   ) * 0.2
+        av_sep_islands = np.mean( sep_islands ) * 0.2 if sep_islands.any() != None else None # convert to units of coherence lengths
+        
+        return count_total, count_pairs, n_islands, av_R_islands, av_L_islands, av_sep_islands
           
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
         return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
+    
     
