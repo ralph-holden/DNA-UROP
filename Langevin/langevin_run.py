@@ -5,7 +5,7 @@ Created on Fri Jul 19 10:20:05 2024
 @author: 44775
 """
 # # # IMPORTS # # #
-from langevin_model import Grain, Strand, Simulation, gen_grains, np, Tuple, combinations
+from langevin_model import Grain, Strand, Simulation, Start_position, np, Tuple, combinations
 from langevin_model import kb, temp, kappab, lp
 import pickle
 import sys
@@ -20,14 +20,16 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
 nsteps = 5000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 5
+coherence_lengths = 10
+nsegs = 5 * coherence_lengths
 ystart = -coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 1
+sep = 5
 sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 6, 12, 6 # from -lim to +lim 
+xlim, ylim, zlim = 20, 20, 20 # from -lim to +lim 
+
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
@@ -35,12 +37,17 @@ save_data = False
 log_update = 50 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 10 # frame dump frequency
+frame_hop = 50 # frame dump frequency
+
 
 # # # INITIALISE & RUN SIMULATION # # #
-Strand1 = Strand(gen_grains(coherence_lengths,[xstartA,ystart,0]))
-Strand2 = Strand(gen_grains(coherence_lengths,[xstartB,ystart,0]))
-sim = Simulation(Strand1, Strand2, boxlims=np.array([xlim,ylim,zlim]))
+spA = Start_position(nsegs, xstartA, ystart, 0)
+Strand1 = spA.create_strand_straight() # spA.create_strand_curved()
+
+spB = Start_position(nsegs, xstartB, ystart, 0)
+Strand2 = spB.create_strand_straight() # spB.create_strand_curved()
+
+sim = Simulation(StrandA=Strand1, StrandB=Strand2, boxlims=np.array([xlim,ylim,zlim]))
 
 
 for handler in logging.root.handlers[:]:
@@ -50,10 +57,7 @@ logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message
 logging.info('Simulation started')
 
 for i, item in enumerate(range(nsteps)):
-    #k_spring = 10000*kb
     sim.run_step()
-    
-    #k_spring /= 1.1
     
     length = 20
     progress = (i + 1) / nsteps
@@ -64,13 +68,16 @@ for i, item in enumerate(range(nsteps)):
     
     # log file & data output
     if i % log_update == 0:
-        #sim.record()
         endtoendA, endtoendB = sim.endtoends[-1][0], sim.endtoends[-1][1]
         logging.info(f'''Step {i} : DATA:
 Strand A end to end = {endtoendA} lc
 Strand B end to end = {endtoendB} lc
 Total Pairs = {sim.pair_counts[-1][0]}
-Simulation Total Energy = {sim.energies[-1]} 
+Number of Islands = {sim.n_islands[-1]}
+Simulation Internal Energy = {sim.energies[-1]}
+Island Pair Distance = {sim.av_R_islands[-1]}
+Average Island Length = {sim.av_L_islands[-1]}
+Average Island Separation = {sim.av_sep_islands[-1]}
 ...''')
         print(f'''\rStrand A end to end = {endtoendA} lc
 Strand B end to end = {endtoendB} lc
@@ -109,10 +116,11 @@ plt.savefig('./Data_outputs/endtoend.png')
 plt.show()
 
 # plotting number of pairs
-totpair_end, selfpair_end = sim.count_tot()
+totpair_end, selfpair_end = sim.pair_counts[-1][0], sim.pair_counts[-1][1]
 print()
 print(f'Total number of paired grains = {totpair_end}')
 print(f'Number of paired grains to self = {selfpair_end}')
+print(f'Number of Islands = {sim.n_islands[-1]}')
 
 plt.figure()
 plt.title('Coarse Grain DNA Pairs')
@@ -120,14 +128,15 @@ plt.xlabel('Timestep')
 plt.ylabel('Paired DNA Grains, $0.2 l_c$')
 plt.plot(xsteps, totpair, label = 'Total')
 plt.plot(xsteps, selfpair, label = 'Self')
+plt.plot(xsteps, sim.n_islands, label = 'Islands')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
 plt.savefig('./Data_outputs/pairs.png')
 plt.show()
 
-# plotting total free energy
+# plotting total internal energy
 print()
-print(f'Free Energy = {sim.energies[-1]} kbT')
+print(f'Internal Energy = {sim.energies[-1]} kbT')
 
 plt.figure()
 plt.title('Coarse Grain DNA Internal Energy')
@@ -138,6 +147,49 @@ plt.grid(linestyle=':')
 plt.legend(loc='best')
 plt.savefig('./Data_outputs/energy.png')
 plt.show()
+
+# plotting average island pair distance
+print()
+print(f'Average Island Pair Distance = {sim.av_R_islands[-1]}')
+
+plt.figure()
+plt.title('Average Island Pair Distance')
+plt.xlabel('Timestep')
+plt.ylabel('R, $l_c$')
+plt.plot(xsteps, sim.av_R_islands, label='')
+plt.grid(linestyle=':')
+plt.legend(loc='best')
+plt.savefig('./Data_outputs/island_R.png')
+plt.show()
+
+# plotting average island length
+print()
+print(f'Average Island Length = {sim.av_L_islands[-1]}')
+
+plt.figure()
+plt.title('Average Island Length')
+plt.xlabel('Timestep')
+plt.ylabel('L, $l_c$')
+plt.plot(xsteps, sim.av_L_islands, label='')
+plt.grid(linestyle=':')
+plt.legend(loc='best')
+plt.savefig('./Data_outputs/island_length.png')
+plt.show()
+
+# plotting average island separation
+print()
+print(f'Average Island Separation = {sim.av_sep_islands[-1]}')
+
+plt.figure()
+plt.title('Average Island Separation')
+plt.xlabel('Timestep')
+plt.ylabel('L, $l_c$')
+plt.plot(xsteps, sim.av_sep_islands, label='')
+plt.grid(linestyle=':')
+plt.legend(loc='best')
+plt.savefig('./Data_outputs/island_separation.png')
+plt.show()
+
     
 # # # ANIMATION # # #
 if animate:
@@ -150,7 +202,7 @@ if animate:
     num_frames = len(selected_frames)
     
     # Create a figure and a 3D axis
-    fig = plt.figure()
+    fig = plt.figure(figsize=[16,10])
     ax = fig.add_subplot(111, projection='3d')
     
     # Precomputed data (replace these lists with your actual data)
@@ -191,10 +243,10 @@ if animate:
         return line1, line2, frame_text
     
     # Create the animation
-    ani = FuncAnimation(fig, update, frames=num_frames, interval=400, blit=False)
+    ani = FuncAnimation(fig, update, frames=num_frames, interval=50, blit=False)
     
     # Save the animation as an MP4 file (uncomment to save)
-    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=10))
+    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=20))
     
     logging.info('Animation saved as GIF')
     
