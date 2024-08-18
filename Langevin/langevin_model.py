@@ -540,7 +540,7 @@ class Strand:
         energy = 0
         for seg_index in range(1,self.num_segments-1):
             angle = self.find_angle(seg_index)
-            energy += k_bend *  angle**2
+            energy += 1/2 * k_bend *  angle**2
         return energy / (kb*300) # give energy in kbT units
     
     # for data
