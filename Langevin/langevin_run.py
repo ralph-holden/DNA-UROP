@@ -21,31 +21,32 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 nsteps = 5000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
 coherence_lengths = 10
-nsegs = 5 * coherence_lengths
-ystart = -coherence_lengths/2
+curved = False
+nsegs = 5 * coherence_lengths 
+ystart = coherence_lengths/(5*np.pi) if curved else -1*coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 5
+sep = 0.7
 sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 20, 20, 20 # from -lim to +lim 
+xlim, ylim, zlim = 6, 6, 6 # from -lim to +lim 
 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
 save_data = False
-log_update = 50 # how often to publish values to the log file
+log_update = 200 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 50 # frame dump frequency
+frame_hop = 10 # frame dump frequency
 
 
 # # # INITIALISE & RUN SIMULATION # # #
 spA = Start_position(nsegs, xstartA, ystart, 0)
-Strand1 = spA.create_strand_straight() # spA.create_strand_curved()
+Strand1 = spA.create_strand_curved() if curved else spA.create_strand_straight()
 
 spB = Start_position(nsegs, xstartB, ystart, 0)
-Strand2 = spB.create_strand_straight() # spB.create_strand_curved()
+Strand2 = spB.create_strand_curved() if curved else spB.create_strand_straight()
 
 sim = Simulation(StrandA=Strand1, StrandB=Strand2, boxlims=np.array([xlim,ylim,zlim]))
 
