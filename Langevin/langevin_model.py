@@ -32,12 +32,12 @@ from scipy import special
 from scipy.constants import epsilon_0, Boltzmann
 
 # # # UNITS # # #
-kb = 1 #1.38e-23
+kb = 1 # 1.38e-23
 temp = 310.15
 
 # # # PARAMETERS # # #
 # Worm Like Chain Bending
-lp = 4.5 # persistence length, in coherence length diameter grains of 100 Angstroms
+lp = 5 # persistence length, in coherence length diameter grains of 100 Angstroms
 kappab = lp * kb * temp # bending stiffness
 s = 0.4 # standard distance through chain separated by one Grain
 k_bend = kappab/s # Bending stiffness constant
@@ -45,13 +45,13 @@ k_bend = kappab/s # Bending stiffness constant
 k_spring = 300*kb  # Spring constant for bonds
 
 # Simulation Interaction Parameters
-R_cut = 0.75 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms)
+R_cut = 0.75 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 5 # avoid interactions between grains in same strand
 homology_set = False
 
 # Langevin 
-lamb = 0.25 # damping coefficient
-dt = 0.0001 # timestep
+lamb = 0.75 # damping coefficient
+dt = 0.0001 # timestep, per unit mass
 
 
 
@@ -114,12 +114,6 @@ class Start_position:
         ax.set_zlabel('Z axis')
     
         plt.show()
-
-def gen_grains(coherence_lengths, start_position):
-    strand = [Grain(start_position, np.zeros(3) )]
-    for i in range(5*coherence_lengths-1):
-        strand.append( Grain( strand[-1].position + np.array([0, 0.2, 0]), np.zeros(3) ) )
-    return strand
 
 
 
@@ -207,9 +201,9 @@ class Electrostatics:
         
         self.Eint *= (4*np.pi*epsilon_0)
         self.Eint /= (Boltzmann * 300) 
-        #self.Eint *= 10**8 # from gaussian to in kbT units
+        self.Eint *= 10**8 # multiply by l_0 for factor of L[m] to L[l_c]
 
-    def find_energy(self, Lindex: int, R: float):
+    def find_energy(self, Lindex: int, R: float, ishomol = False):
         '''Finds energy of ONE L, R point'''
         
         Lmin = 20  * 10**-10
@@ -222,34 +216,35 @@ class Electrostatics:
 
         SP_min_factor = np.cos(np.arccos(np.clip(a1/(4*a2), -1, 1))) if abs(a2) > 10**-10 else np.cos(np.pi) # avoid dividing by zero error
         
-        if not self.homol:
+        if not ishomol: 
             Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
-        elif self.homol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * L
+        elif ishomol:
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * 1
             
         Eint *= (4*np.pi*epsilon_0)
         Eint /= (Boltzmann * 300) # from gaussian to in kbT units
-        #Eint *= 10**8 # for factor of L[m] to L[l_c]
+        # Eint *= 10**8 # multiply by l_0 for factor of L[m] to L[l_c]
         
         return Eint
     
-    def find_energy_fc(self, L: float, R: float):
+    def find_energy_fc(self, L: float, R: float, ishomol = False):
         '''
         Finds energy of ONE L, R point with fully continuous (fc) inputs 
         For use in find_force(), where dE/dRdL required
+        Additional boolean input from force() function, default NON homologous
         '''
         a0, a1, a2 = self.a(R)
         
         SP_min_factor = np.cos(np.arccos(np.clip(a1/(4*a2), -1, 1))) if abs(a2) > 10**-10 else np.cos(np.pi) # avoid dividing by zero error
         
-        if not self.homol:
+        if not ishomol: 
             Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
-        elif self.homol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * L
+        elif ishomol:
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * 1
         
         Eint *= (4*np.pi*epsilon_0)
         Eint /= (Boltzmann * 300) # from gaussian to in kbT units
-        #Eint *= 10**8 # for factor of L[m] to L[l_c]
+        # Eint *= 10**8 # for factor of L[m] to L[l_c]
         
         return Eint
 
@@ -263,17 +258,22 @@ class Electrostatics:
         Force  : float, magnitude (including +-) of electrostatic interaction
                  negative gradient of energy with respect to separation, R 
         '''
+        ishomol = type(Lindex) == str # for individual interaction, allows for non homologous interactions within homologous system
+        
         Lmin = 20  * 10**-10
         Lmax = 100000 * 10**-10
         Lstep = 20 * 10**-10 # grain diameter
         Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-        L = Lrange[Lindex-1]
+        L = Lrange[Lindex-1] if ishomol else 1
         
         h = 0.0001 * 10**-10 # for differentiation by first principles
         # mixed differentiation by first principles, NOTE: could use analytical derivative to save computational cost
-        dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
-        
-        return -1*dE_dRdL
+        if not ishomol:
+            dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
+            return -1*dE_dRdL
+        if ishomol:
+            dE_dR = ( self.find_energy(Lindex, R+h, ishomol) - self.find_energy(Lindex, R, ishomol) ) / h
+            return -1*dE_dR
         
     def plot_energy_map(self):
         '''Must be used after gen_energy_map()'''
@@ -490,11 +490,17 @@ class Strand:
                     Llist = [i] + Llist
                 for i in range(2, len(isle[0])-leading+1): # forwards from leading + 1
                     Llist += [i]
+                if homology_set:
+                    for inter, index in enumerate(isle[0]):
+                        if inter.split(' ')[0][1:] == inter.split(' ')[1][1:] :
+                            Llist[index] = 'homol'
                 isle.append(Llist)
             else:
                 isle.append([])
+                
             
-    def f_elstat(self, other, homol=False):
+            
+    def f_elstat(self, other):
         ''' 
         NOTE: does not yet account for NON homologous interactions for HOMOLOGOUS strands
         '''
@@ -589,21 +595,23 @@ class Simulation:
             # apply drag, using 'trick' dt=1 to rescale velocity fully
             grain.update_velocity(damping_force, 1)
             # Random thermal force
-            random_force = np.random.normal(0, np.sqrt(2 * lamb * kb * temp / dt), size=3)
+            random_force = np.random.normal(0, np.sqrt(2 * lamb * kb * temp / dt), size=3) # mass set to unity
             # Damping force
             grain.update_velocity(random_force,dt)
             
     def apply_box(self):
+        returning_force = 2000
         for grain in self.StrandA.dnastr + self.StrandB.dnastr:
             for i in range(3):
-                grain.velocity[i]*=-1 if abs(grain.position[i]+grain.radius)>=self.boxlims[i] and grain.position[i]*grain.velocity[i]>0 else 1
-        # alternative, particles not allowed to leave box. Will not violate langevin simulation if apply_box() used before velocity updates
-        
+                if grain.position[i] + grain.radius > self.boxlims[i]:
+                    grain.update_velocity(-1*returning_force, dt) 
+                if grain.position[i] - grain.radius < self.boxlims[i]:
+                    grain.update_velocity(+1*returning_force, dt)
+       
     def update_positions(self):
         for grain in self.StrandA.dnastr + self.StrandB.dnastr:
             grain.update_position(dt)
             
-          
     # for data analysis
     def record(self):
         
