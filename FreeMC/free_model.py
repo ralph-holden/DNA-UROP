@@ -40,7 +40,7 @@ temp = 310.15
 # Settings
 homology_set = False # False -> NON homologous
 catch_set = False # requirement that number of pairs cannot decrease
-angle_step = np.pi / 360 / 100 # maximum angle change between each grain (theta and phi)
+angle_step = np.pi / 360 / 50 # maximum angle change between each grain (theta and phi)
 
 # Worm Like Chain Bending
 lp = 5 # persistence length, in coherence length diameter grains of 100 Angstroms
@@ -50,7 +50,7 @@ s = 0.4 # standard distance through chain separated by one Grain
 k_bend = kappab/s # Bending stiffness constant
 
 # Simulation Interaction Parameters
-R_cut = 0.5 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms)
+R_cut = 0.75 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms)
 self_interaction_limit = 5 # avoid interactions between grains in same strand
 
 
@@ -292,9 +292,9 @@ class Electrostatics:
         
         self.Eint *= (4*np.pi*epsilon_0)
         self.Eint /= (Boltzmann * 300) 
-        #self.Eint *= 10**8 # from gaussian to in kbT units
+        self.Eint *= 10**8 # multiply by l_0 for factor of L[m] to L[l_c]
 
-    def find_energy(self, Lindex: int, R: float):
+    def find_energy(self, Lindex: int, R: float, ishomol = False):
         '''Finds energy of ONE L, R point'''
         
         Lmin = 20  * 10**-10
@@ -307,34 +307,35 @@ class Electrostatics:
 
         SP_min_factor = np.cos(np.arccos(np.clip(a1/(4*a2), -1, 1))) if abs(a2) > 10**-10 else np.cos(np.pi) # avoid dividing by zero error
         
-        if not self.homol:
+        if not ishomol: 
             Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
-        elif self.homol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * L
+        elif ishomol:
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * 1
             
         Eint *= (4*np.pi*epsilon_0)
         Eint /= (Boltzmann * 300) # from gaussian to in kbT units
-        #Eint *= 10**8 # for factor of L[m] to L[l_c]
+        # Eint *= 10**8 # multiply by l_0 for factor of L[m] to L[l_c]
         
         return Eint
     
-    def find_energy_fc(self, L: float, R: float):
+    def find_energy_fc(self, L: float, R: float, ishomol = False):
         '''
         Finds energy of ONE L, R point with fully continuous (fc) inputs 
         For use in find_force(), where dE/dRdL required
+        Additional boolean input from force() function, default NON homologous
         '''
         a0, a1, a2 = self.a(R)
         
         SP_min_factor = np.cos(np.arccos(np.clip(a1/(4*a2), -1, 1))) if abs(a2) > 10**-10 else np.cos(np.pi) # avoid dividing by zero error
         
-        if not self.homol:
+        if not ishomol: 
             Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
-        elif self.homol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * L
+        elif ishomol:
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * 1
         
         Eint *= (4*np.pi*epsilon_0)
         Eint /= (Boltzmann * 300) # from gaussian to in kbT units
-        #Eint *= 10**8 # for factor of L[m] to L[l_c]
+        # Eint *= 10**8 # for factor of L[m] to L[l_c]
         
         return Eint
 
@@ -348,17 +349,22 @@ class Electrostatics:
         Force  : float, magnitude (including +-) of electrostatic interaction
                  negative gradient of energy with respect to separation, R 
         '''
+        ishomol = type(Lindex) == str # for individual interaction, allows for non homologous interactions within homologous system
+        
         Lmin = 20  * 10**-10
         Lmax = 100000 * 10**-10
         Lstep = 20 * 10**-10 # grain diameter
         Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-        L = Lrange[Lindex-1]
+        L = Lrange[Lindex-1] if ishomol else 1
         
         h = 0.0001 * 10**-10 # for differentiation by first principles
         # mixed differentiation by first principles, NOTE: could use analytical derivative to save computational cost
-        dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
-        
-        return -1*dE_dRdL
+        if not ishomol:
+            dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
+            return -1*dE_dRdL
+        if ishomol:
+            dE_dR = ( self.find_energy(Lindex, R+h, ishomol) - self.find_energy(Lindex, R, ishomol) ) / h
+            return -1*dE_dR
         
     def plot_energy_map(self):
         '''Must be used after gen_energy_map()'''
@@ -588,6 +594,10 @@ class Strand:
                     Llist = [i] + Llist
                 for i in range(2, len(isle[0])-leading+1): # forwards from leading + 1
                     Llist += [i]
+                if homology_set:
+                    for inter, index in enumerate(isle[0]):
+                        if inter.split(' ')[0][1:] == inter.split(' ')[1][1:] :
+                            Llist[index] = 'homol'
                 isle.append(Llist)
             else:
                 isle.append([])
