@@ -11,10 +11,8 @@ MODEL:
    
 CODE & SIMULATION:
     Metropolis algorithm (a Monte Carlo method) used to propagate DNA strands
-    Each Monte Carlo step shifts bead angle along entire dsDNA strand
+    Each Monte Carlo step shifts bead angle along entire dsDNA strand, at constant distance
     Additional requirements for a random move are; 
-        excluded volume interactions
-        keeping the strand intact
         and keeping inside the simulation box (confined DNA, closed simulation)
     Energy dependant on:
         worm like chain bending (small angle approx -> angular harmonic)
@@ -58,7 +56,22 @@ self_interaction_limit = 5 # avoid interactions between grains in same strand
 # # # aux functions # # #
 # function to generate DNA strand
 class Start_position:
+    '''
+    Initialises the starting positions of a DNA strand
     
+    INPUTS:
+        num_segments: int
+        xstart      : float, starting position of first DNA 'bead'
+        ystart      : float
+        zstart      :
+    
+    METHODS:
+        create_strand_curved()  : initalises the positions around semi-circles radius l_p/pi
+                                  NOTE: causes start in non equilibrium bond distances
+        create_strand_straight(): initalises the positions in a simple straight line
+                                  NOTE: causes start in non equilibrium curvature
+        plot_start()            
+    '''
     def __init__(self, num_segments, xstart, ystart, zstart):
         # Parameters
         self.total_points = num_segments # Total number of points (adjust this value as needed)
@@ -213,6 +226,8 @@ class Electrostatics:
     ''' 
     Electrostatic helical interaction as described by Kornyshev - Leikin theory
     From 'Sequence Recognition in the Pairing of DNA Duplexes', Kornyshev & Leikin, 2001, DOI: 10.1103/PhysRevLett.86.3666
+    
+    NOTE: uses real units of metres for length, but energy in kbT, therefore force in kbT per metre
     '''
     # constants
     eps = 80 # ~dielectric constant water, conversion to per Angstrom^-3
@@ -371,26 +386,17 @@ class Electrostatics:
         x, y = self.Lrange, self.Rrange
         z = self.Eint
         
-        # Create a new figure for the 3D plot
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
         
-        # Plot the surface
         surf = ax.plot_surface(x, y, z, cmap='viridis', alpha=0.7)
         
-        # Add a color bar which maps values to colors
         fig.colorbar(surf)
         
-        # limits
-        #ax.set_xlim([np.min(x), np.max(x)])
-        #ax.set_ylim([np.min(y), np.max(y)])
-        
-        # Set labels
         ax.set_xlabel('L (m)')
         ax.set_ylabel('R (m)')
         ax.set_zlabel('Eint (kbT)')
         
-        # Show the plot
         plt.show()
 
 # Pairing interaction energy
@@ -568,7 +574,7 @@ class Strand:
         return ignore_interaction
     
     def update_repetitions(self, other, island, idnti, idntj, R_norm):
-        ''' function, along with repetitions attribute no longer used '''
+        ''' ***OUTDATED*** function, along with repetitions attribute no longer used '''
         if island == 'new':
             self.repetitions.append( [[],[]] )
             island = -1
@@ -585,6 +591,10 @@ class Strand:
                 self.repetitions[island][1] += [ np.linalg.norm( g1.position - g2.position ) - 0.2 ]
                 
     def assign_L(self, other):
+        '''
+        Gives 'L' length of interacting dsDNA in 'island' of interaction
+        Prioritises closest interacting grain to centre L at L=1, from here, interaction length builds up within island
+        '''
         for isle in self.interactions:
             # arrange in order ?
             if isle != [[],[]]:
@@ -605,9 +615,8 @@ class Strand:
     def eng_elstat(self, other, homol=False):
         '''
         Does electrostatic energy of BOTH strands
+        In each step, use after f_elstat() so gen functions do not have to be repeated, homol argument in f_elstat() defines homologicity
         '''
-        self.find_interactions(other)
-        self.assign_L(other)
         energy = 0
         for isle in self.interactions:
             if isle[1] == [] or isle[2] == []:
@@ -615,7 +624,11 @@ class Strand:
             for n in range(len( isle[1] )):
                 g_R = isle[1][n]
                 g_L = isle[2][n]
-                energy +=  elstats.find_energy(g_L, g_R) - elstats.find_energy(g_L-1, g_R) # remove 'built-up' energy over L w/ different R
+                ishomol = type(g_L) == str
+                if not ishomol:
+                    energy +=  elstats.find_energy(g_L, g_R) - elstats.find_energy(g_L-1, g_R) # remove 'built-up' energy over L w/ different R
+                elif ishomol:
+                    energy += elstats.find_energy(1, g_R, ishomol=True) # energy is per unit length
         return energy
 
     # elastic chain
