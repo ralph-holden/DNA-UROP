@@ -19,9 +19,6 @@ CODE & SIMULATION:
     Energy dependant on:
         worm like chain bending (small angle approx -> angular harmonic)
         conditional electrostatic interactions as described in Kornyshev-Leikin theory
-
-NOTE: architecture improvement may involve changing some functions to take specific Grains as arguments,
-    so that a single loop around cominations can be used for many functions - faster
 """
 # imports
 from itertools import combinations
@@ -47,17 +44,37 @@ k_spring = 300*kb  # Spring constant for bonds
 # Simulation Interaction Parameters
 R_cut = 0.75 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 5 # avoid interactions between grains in same strand
-homology_set = False
+homology_set = True # False -> NON homologous
 
 # Langevin 
-lamb = 0.75 # damping coefficient
-dt = 0.0001 # timestep, per unit mass
-
+dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
+#dynamic_coefficient_friction *= Boltzmann*300/10**8 ???
+l_kuhn = lp # persistence length
+gamma = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
+gamma = 0.5 # reset gamma FOR NOW
+dt = 0.001 # timestep, per unit mass
+grain_mass = 1
+correlation_length = 25 # number of grains with (fully) correlated fluctuations
 
 
 # # # Aux functions # # #
 class Start_position:
+    '''
+    Initialises the starting positions of a DNA strand
     
+    INPUTS:
+        num_segments: int
+        xstart      : float, starting position of first DNA 'grain'
+        ystart      : float
+        zstart      :
+    
+    METHODS:
+        create_strand_curved()  : initalises the positions around semi-circles radius l_p/pi
+                                  NOTE: causes start in non equilibrium bond distances
+        create_strand_straight(): initalises the positions in a simple straight line
+                                  NOTE: causes start in non equilibrium curvature
+        plot_start()            
+    '''
     def __init__(self, num_segments, xstart, ystart, zstart):
         # Parameters
         self.total_points = num_segments # Total number of points (adjust this value as needed)
@@ -68,8 +85,6 @@ class Start_position:
         self.xstart = xstart
         self.ystart = ystart
         self.zstart = zstart
-    
-        
     
     def create_strand_curved(self):
         # Create arrays for x, y, and z coordinates
@@ -122,6 +137,8 @@ class Electrostatics:
     ''' 
     Electrostatic helical interaction as described by Kornyshev - Leikin theory
     From 'Sequence Recognition in the Pairing of DNA Duplexes', Kornyshev & Leikin, 2001, DOI: 10.1103/PhysRevLett.86.3666
+    
+    NOTE: uses real units of metres for length, but energy in kbT, therefore force in kbT per metre
     '''
     # constants
     eps = 80 # ~dielectric constant water, conversion to per Angstrom^-3
@@ -204,13 +221,16 @@ class Electrostatics:
         self.Eint *= 10**8 # multiply by l_0 for factor of L[m] to L[l_c]
 
     def find_energy(self, Lindex: int, R: float, ishomol = False):
-        '''Finds energy of ONE L, R point'''
+        '''
+        Finds energy of ONE L, R point
+        For use in Strand energy calculations
+        '''
         
         Lmin = 20  * 10**-10
         Lmax = 100000 * 10**-10
         Lstep = 20 * 10**-10 # grain diameter
         Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-        L = Lrange[Lindex-1]
+        L = Lrange[Lindex-1] if not ishomol else 1
         
         a0, a1, a2 = self.a(R)
 
@@ -219,11 +239,10 @@ class Electrostatics:
         if not ishomol: 
             Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
         elif ishomol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * 1
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * 1 # one unit of L
             
         Eint *= (4*np.pi*epsilon_0)
         Eint /= (Boltzmann * 300) # from gaussian to in kbT units
-        # Eint *= 10**8 # multiply by l_0 for factor of L[m] to L[l_c]
         
         return Eint
     
@@ -232,6 +251,7 @@ class Electrostatics:
         Finds energy of ONE L, R point with fully continuous (fc) inputs 
         For use in find_force(), where dE/dRdL required
         Additional boolean input from force() function, default NON homologous
+        For use in force()
         '''
         a0, a1, a2 = self.a(R)
         
@@ -244,7 +264,6 @@ class Electrostatics:
         
         Eint *= (4*np.pi*epsilon_0)
         Eint /= (Boltzmann * 300) # from gaussian to in kbT units
-        # Eint *= 10**8 # for factor of L[m] to L[l_c]
         
         return Eint
 
@@ -252,6 +271,7 @@ class Electrostatics:
         '''         
         INPUTS:
         Lindex: int  , index of truncated grain pairing interaction, one unit is 0.2 lamb_c. NOTE: can be a numpy array (1D)
+                       NOTE: force can be str ('homol'), changing the mode of interaction to homologous from NON homologous
         R     : float, inter-grain separation.
         
         OUTPUT:
@@ -264,7 +284,7 @@ class Electrostatics:
         Lmax = 100000 * 10**-10
         Lstep = 20 * 10**-10 # grain diameter
         Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-        L = Lrange[Lindex-1] if ishomol else 1
+        L = Lrange[Lindex-1] if not ishomol else 1
         
         h = 0.0001 * 10**-10 # for differentiation by first principles
         # mixed differentiation by first principles, NOTE: could use analytical derivative to save computational cost
@@ -272,7 +292,7 @@ class Electrostatics:
             dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
             return -1*dE_dRdL
         if ishomol:
-            dE_dR = ( self.find_energy(Lindex, R+h, ishomol) - self.find_energy(Lindex, R, ishomol) ) / h
+            dE_dR = ( self.find_energy_fc(L, R+h, ishomol) - self.find_energy_fc(L, R, ishomol) ) / h
             return -1*dE_dR
         
     def plot_energy_map(self):
@@ -280,26 +300,17 @@ class Electrostatics:
         x, y = self.Lrange, self.Rrange
         z = self.Eint
         
-        # Create a new figure for the 3D plot
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
         
-        # Plot the surface
         surf = ax.plot_surface(x, y, z, cmap='viridis', alpha=0.7)
         
-        # Add a color bar which maps values to colors
         fig.colorbar(surf)
         
-        # limits
-        #ax.set_xlim([np.min(x), np.max(x)])
-        #ax.set_ylim([np.min(y), np.max(y)])
-        
-        # Set labels
         ax.set_xlabel('L (m)')
         ax.set_ylabel('R (m)')
         ax.set_zlabel('Eint (kbT)')
         
-        # Show the plot
         plt.show()
 
 # Pairing interaction energy
@@ -312,11 +323,10 @@ class Grain():
         self.position = np.array(position, dtype=np.float64)
         self.velocity = np.array(velocity, dtype=np.float64)
         self.radius = radius
-        self.mass = 1
 
     def update_velocity(self, force, dt):
         # Update velocity based on the applied force
-        self.velocity += force / self.mass * dt
+        self.velocity += force / grain_mass * dt
 
     def update_position(self, dt):
         # Update position based on the velocity
@@ -392,6 +402,7 @@ class Strand:
         # return 180 - angle
         return np.pi - np.arccos(np.dot(p3-p2,p1-p2) / (np.linalg.norm(p3-p2)*np.linalg.norm(p1-p2) ) )
         
+    # electrostatic interaction
     def find_interactions(self, other) -> list:
         '''
         Generates from 0th Bead, electrostatic interaction counted for whole Strand
@@ -464,7 +475,7 @@ class Strand:
         return ignore_interaction
     
     def update_repetitions(self, other, island, idnti, idntj, R_norm):
-        ''' function, along with repetitions attribute no longer used '''
+        ''' ***OUTDATED*** function, along with repetitions attribute no longer used '''
         if island == 'new':
             self.repetitions.append( [[],[]] )
             island = -1
@@ -481,6 +492,10 @@ class Strand:
                 self.repetitions[island][1] += [ np.linalg.norm( g1.position - g2.position ) - 0.2 ]
                 
     def assign_L(self, other):
+        '''
+        Gives 'L' length of interacting dsDNA in 'island' of interaction
+        Prioritises closest interacting grain to centre L at L=1, from here, interaction length builds up within island
+        '''
         for isle in self.interactions:
             # arrange in order ?
             if isle != [[],[]]:
@@ -491,18 +506,16 @@ class Strand:
                 for i in range(2, len(isle[0])-leading+1): # forwards from leading + 1
                     Llist += [i]
                 if homology_set:
-                    for inter, index in enumerate(isle[0]):
+                    for index, inter in enumerate(isle[0]):
                         if inter.split(' ')[0][1:] == inter.split(' ')[1][1:] :
                             Llist[index] = 'homol'
                 isle.append(Llist)
             else:
                 isle.append([])
-                
-            
-            
+                  
     def f_elstat(self, other):
         ''' 
-        NOTE: does not yet account for NON homologous interactions for HOMOLOGOUS strands
+        Calculates force from electrostatic interaction (homologous and NON) on each interacting grain
         '''
         self.find_interactions(other)
         self.assign_L(other)
@@ -535,7 +548,11 @@ class Strand:
             for n in range(len( isle[1] )):
                 g_R = isle[1][n]
                 g_L = isle[2][n]
-                energy +=  elstats.find_energy(g_L, g_R) - elstats.find_energy(g_L-1, g_R) # remove 'built-up' energy over L w/ different R
+                ishomol = type(g_L) == str
+                if not ishomol:
+                    energy +=  elstats.find_energy(g_L, g_R) - elstats.find_energy(g_L-1, g_R) # remove 'built-up' energy over L w/ different R
+                elif ishomol:
+                    energy += elstats.find_energy(1, g_R, ishomol=True) # energy is per unit length
         return energy
         
     def eng_elastic(self) -> float:
@@ -580,7 +597,7 @@ class Simulation:
         #self.record()
 
     def run_step(self):
-        self.apply_langevin_dynamics()
+        self.apply_langevin_dynamics(correlated=True)
         self.StrandA.f_bond(), self.StrandB.f_bond()
         self.StrandA.f_wlc(), self.StrandB.f_wlc() 
         self.StrandA.f_elstat(self.StrandB)
@@ -588,25 +605,60 @@ class Simulation:
         self.update_positions()
         self.record()
         
-    def apply_langevin_dynamics(self):
-        for grain in self.StrandA.dnastr + self.StrandB.dnastr:
-            # Drag force
-            damping_force = -lamb * grain.velocity # with lamb = 1, zeroes previous velocity -> Brownian
-            # apply drag, using 'trick' dt=1 to rescale velocity fully
-            grain.update_velocity(damping_force, 1)
-            # Random thermal force
-            random_force = np.random.normal(0, np.sqrt(2 * lamb * kb * temp / dt), size=3) # mass set to unity
-            # Damping force
-            grain.update_velocity(random_force,dt)
+    def apply_langevin_dynamics(self, correlated=True):
+        '''
+        correlated = True (default)
+        Applies UNcorrellated brownian force to each 'correlation length'
+        Fully correllated within fluctuation 'correlation length'
+        
+        correlated = False
+        Random, uncorrelated force applied to each individual particle, 1/5 coherence length
+        '''
+        fluctuation_size = np.sqrt(2 * grain_mass * gamma * kb * temp / dt)
+        correlation_length = 25
+        if correlated:
+            for grain in self.StrandA.dnastr + self.StrandB.dnastr:
+                # Drag force
+                damping_force = -gamma * grain.velocity # with gamma = 1, zeroes previous velocity -> Brownian
+                # apply drag, using 'trick' dt=1 to rescale velocity fully
+                grain.update_velocity(damping_force, 1)
+            for strand in [self.StrandA,self.StrandB]:
+                for n in range(correlation_length, strand.num_segments+1, correlation_length):
+                    for grains in [strand.dnastr[n-correlation_length:n]]:
+                        # Random thermal force
+                        random_force = np.random.normal(0, fluctuation_size, size=3) 
+                        for g in grains:
+                            g.update_velocity(random_force,dt)
+        
+        elif not correlated:
+            for grain in self.StrandA.dnastr + self.StrandB.dnastr:
+                # Drag force
+                damping_force = -gamma * grain.velocity # with gamma = 1, zeroes previous velocity -> Brownian
+                # apply drag, using 'trick' dt=1 to rescale velocity fully
+                grain.update_velocity(damping_force, 1)
+                # Random thermal force
+                random_force = np.random.normal(0, fluctuation_size, size=3) 
+                # Damping force
+                grain.update_velocity(random_force,dt)
             
     def apply_box(self):
-        returning_force = 2000
-        for grain in self.StrandA.dnastr + self.StrandB.dnastr:
+        '''
+        Constant force be applied to entire strand when one part strays beyond box limits
+        '''
+        returning_force_mag = 1000
+        for strand in self.StrandA,self.StrandB:
+            returning_force = np.array([0., 0., 0.])
             for i in range(3):
-                if grain.position[i] + grain.radius > self.boxlims[i]:
-                    grain.update_velocity(-1*returning_force, dt) 
-                if grain.position[i] - grain.radius < self.boxlims[i]:
-                    grain.update_velocity(+1*returning_force, dt)
+                for grain in strand.dnastr:
+                    if grain.position[i] + grain.radius > self.boxlims[i]:
+                        returning_force[i] += -1*returning_force_mag
+                        continue # no need to check for any more
+                    if grain.position[i] - grain.radius < -self.boxlims[i]:
+                        returning_force[i] += +1*returning_force_mag
+                        continue
+            if not np.isclose(np.linalg.norm(returning_force), 0):
+                    for grain in strand.dnastr:
+                        grain.update_velocity(returning_force, dt)
        
     def update_positions(self):
         for grain in self.StrandA.dnastr + self.StrandB.dnastr:
@@ -701,3 +753,4 @@ class Simulation:
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
         return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
+    
