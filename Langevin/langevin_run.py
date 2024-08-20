@@ -6,43 +6,46 @@ Created on Fri Jul 19 10:20:05 2024
 """
 # # # IMPORTS # # #
 from langevin_model import Grain, Strand, Simulation, Start_position, np, Tuple, combinations
-from langevin_model import kb, temp, kappab, lp
+from langevin_model import kb, temp, kappab, lp, dt, gamma, homology_set
 import pickle
 import sys
 import logging
 from datetime import datetime
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
+
 
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 5000
+nsteps = 1500
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
 coherence_lengths = 10
 curved = False
 nsegs = 5 * coherence_lengths 
 ystart = coherence_lengths/(5*np.pi) if curved else -1*coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 0.7
+sep = 5
 sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 6, 6, 6 # from -lim to +lim 
+xlim, ylim, zlim = 10, 10, 10 # from -lim to +lim 
+
 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # save data?
 save_data = False
-log_update = 200 # how often to publish values to the log file
+log_update = 100 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 10 # frame dump frequency
+frame_hop = 50 # frame dump frequency
+
 
 
 # # # INITIALISE & RUN SIMULATION # # #
-spA = Start_position(nsegs, xstartA, ystart, 0)
+spA = Start_position(nsegs, xstartA-10, ystart - 10, 0)
 Strand1 = spA.create_strand_curved() if curved else spA.create_strand_straight()
 
 spB = Start_position(nsegs, xstartB, ystart, 0)
@@ -56,6 +59,16 @@ for handler in logging.root.handlers[:]:
 log_filename = datetime.now().strftime('./Data_outputs/LOG_%Y%m%d_%H%M%S.log')
 logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message)s')
 logging.info('Simulation started')
+logging.info(f'''Simulation parameters:
+    gamma   : {gamma}
+    dt      : {dt}
+    nsteps  : {nsteps}
+    boxlims : {xlim}, {ylim}, {zlim}
+    homology: {homology_set} 
+Starting conditions:
+    separation: {sep-0.2} (surface to surface)
+    curvature : {curved}
+             ''')
 
 for i, item in enumerate(range(nsteps)):
     sim.run_step()
@@ -249,7 +262,7 @@ if animate:
     # Save the animation as an MP4 file (uncomment to save)
     ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=20))
     
-    logging.info('Animation saved as GIF')
+    logging.info('Animation saved as gif')
     
     # Show the plot
     plt.show()
