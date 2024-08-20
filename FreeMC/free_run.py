@@ -6,7 +6,7 @@ Created on Sat Jul 11 13:06:51 2024
 """
 # # # IMPORTS # # #
 from free_model import Vector, Bead, Start_position, Strand, Simulation, np, Tuple, combinations
-from free_model import kb, temp, kappab, lp
+from free_model import kb, temp, kappab, lp, angle_step, homology_set, catch_set
 import pickle
 import sys
 import logging
@@ -17,7 +17,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 500
+nsteps = 50
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
 coherence_lengths = 10
 curved = True
@@ -54,6 +54,16 @@ for handler in logging.root.handlers[:]:
 log_filename = datetime.now().strftime('./Data_outputs/LOG_%Y%m%d_%H%M%S.log')
 logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message)s')
 logging.info('Simulation started')
+logging.info(f'''Simulation parameters:
+    angle step: {angle_step}
+    nsteps    : {nsteps}
+    boxlims   : {xlim}, {ylim}, {zlim}
+    homology  : {homology_set}
+    catch     : {catch_set}
+Starting conditions:
+    separation: {sep-0.2} (surface to surface)
+    curvature : {curved}
+             ''')
 
 for i, item in enumerate(range(nsteps)):
     sim.montecarlostep()
