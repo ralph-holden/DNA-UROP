@@ -614,9 +614,9 @@ class Simulation:
         correlated = False
         Random, uncorrelated force applied to each individual particle, 1/5 coherence length
         '''
-        fluctuation_size = np.sqrt(2 * grain_mass * gamma * kb * temp / dt)
         correlation_length = 25
         if correlated:
+            fluctuation_size = np.sqrt(2 * correlation_length*grain_mass * gamma * kb * temp / dt)
             for grain in self.StrandA.dnastr + self.StrandB.dnastr:
                 # Drag force
                 damping_force = -gamma * grain.velocity # with gamma = 1, zeroes previous velocity -> Brownian
@@ -631,6 +631,7 @@ class Simulation:
                             g.update_velocity(random_force,dt)
         
         elif not correlated:
+            fluctuation_size = np.sqrt(2 * grain_mass * gamma * kb * temp / dt)
             for grain in self.StrandA.dnastr + self.StrandB.dnastr:
                 # Drag force
                 damping_force = -gamma * grain.velocity # with gamma = 1, zeroes previous velocity -> Brownian
