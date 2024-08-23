@@ -2,7 +2,7 @@
 """
 Created on Fri Jul 19 10:20:05 2024
 
-@author: 44775
+@author: Ralph Holden
 """
 # # # IMPORTS # # #
 from langevin_model import Grain, Strand, Simulation, Start_position, np, Tuple, combinations
@@ -13,24 +13,24 @@ import logging
 from datetime import datetime
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
+from matplotlib.animation import FuncAnimation, PillowWriter
 
 
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 1500
+nsteps = 10000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 10
+coherence_lengths = 20
 curved = False
 nsegs = 5 * coherence_lengths 
-ystart = coherence_lengths/(5*np.pi) if curved else -1*coherence_lengths/2
+ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 5
+sep = 3.5
 sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 10, 10, 10 # from -lim to +lim 
+xlim, ylim, zlim = 15, 15, 15 # from -lim to +lim 
 
 
 
@@ -40,13 +40,17 @@ save_data = False
 log_update = 100 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 50 # frame dump frequency
+frame_hop = 100 # frame dump frequency
 
 
 
 # # # INITIALISE & RUN SIMULATION # # #
-spA = Start_position(nsegs, xstartA-10, ystart - 10, 0)
+spA = Start_position(nsegs, xstartA, ystart, 0)
 Strand1 = spA.create_strand_curved() if curved else spA.create_strand_straight()
+
+# rewrite settings to have one curved strand
+curved = True
+ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
 
 spB = Start_position(nsegs, xstartB, ystart, 0)
 Strand2 = spB.create_strand_curved() if curved else spB.create_strand_straight()
@@ -60,11 +64,13 @@ log_filename = datetime.now().strftime('./Data_outputs/LOG_%Y%m%d_%H%M%S.log')
 logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message)s')
 logging.info('Simulation started')
 logging.info(f'''Simulation parameters:
-    gamma   : {gamma}
-    dt      : {dt}
-    nsteps  : {nsteps}
-    boxlims : {xlim}, {ylim}, {zlim}
-    homology: {homology_set} 
+    gamma    : {gamma}
+    dt       : {dt}
+    nsteps   : {nsteps}
+    num parts: {nsegs}
+    num l_c  : {coherence_lengths}
+    boxlims  : {xlim}, {ylim}, {zlim}
+    homology : {homology_set} 
 Starting conditions:
     separation: {sep-0.2} (surface to surface)
     curvature : {curved}
@@ -98,6 +104,11 @@ Strand B end to end = {endtoendB} lc
 Total Pairs = {sim.pair_counts[-1][0]}
 Simulation Total Energy = {sim.energies[-1]} 
 ...''')
+        if not endtoendA < 50*coherence_lengths and not endtoendA > 50*coherence_lengths or not endtoendB < 50*coherence_lengths and not endtoendB > 50*coherence_lengths: #always True if 'nan'
+            error_msg = 'Simulation terminating - lost grains'
+            print(error_msg)
+            logging.info(error_msg)
+            break # end simulation
     
 # save trajectories
 if save_data:
