@@ -44,15 +44,15 @@ k_spring = 300*kb  # Spring constant for bonds
 # Simulation Interaction Parameters
 R_cut = 0.75 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 5 # avoid interactions between grains in same strand
-homology_set = True # False -> NON homologous
+homology_set = False # False -> NON homologous
 
 # Langevin 
 dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
-#dynamic_coefficient_friction *= Boltzmann*300/10**8 ???
+#dynamic_coefficient_friction *= 10**8/(Boltzmann*300)
 l_kuhn = lp # persistence length
 gamma = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
 gamma = 0.5 # reset gamma FOR NOW
-dt = 0.001 # timestep, per unit mass
+dt = 0.00001 # timestep, per unit mass
 grain_mass = 1
 correlation_length = 25 # number of grains with (fully) correlated fluctuations
 
@@ -141,15 +141,15 @@ class Electrostatics:
     NOTE: uses real units of metres for length, but energy in kbT, therefore force in kbT per metre
     '''
     # constants
-    eps = 80 # ~dielectric constant water, conversion to per Angstrom^-3
-    r = 9 * 10**-10 # radius phosphate cylinder, in Angstroms 
+    eps = 80 # ~dielectric constant water
+    r = 9 * 10**-10 # radius phosphate cylinder, in metres
     sigma = 16.8 # phosphate surface change density, in micro coulombs per cm^2
-    sigma /= 10**-6 * (10**2)**2 # in coulombs per Angstrom^2
+    sigma /= 10**-6 * (10**2)**2 # in coulombs per m^2
     theta = 0.8 # fraction phosphate charge neutralised by adsorbed counterions
     f1, f2, f3 = 0.7, 0.3, 0 # fraction of counterions on; double heix minor groove, major groove, phosphate backbone
-    debye = 7 * 10**-10 # Debye length (kappa^-1), in Angstroms
-    H = 34 * 10**-10 # Helical pitch, in Angstroms
-    lamb_c = 100 * 10**-10 # helical coherence length, in Angstroms. NOTE: more recent estimate NOT from afformentioned paper
+    debye = 7 * 10**-10 # Debye length (kappa^-1), in metres
+    H = 34 * 10**-10 # Helical pitch, in metres
+    lamb_c = 100 * 10**-10 # helical coherence length, in metres. NOTE: more recent estimate NOT from afformentioned paper
     coeffs = 16 * np.pi**2 * sigma**2 / eps # coefficients for 'a' terms, apply at end of calculations, for Eint. NOTE: requires a0 to have a prefactor of 1/2
     
     def __init__(self, homol=False):
@@ -271,7 +271,8 @@ class Electrostatics:
         '''         
         INPUTS:
         Lindex: int  , index of truncated grain pairing interaction, one unit is 0.2 lamb_c. NOTE: can be a numpy array (1D)
-                       NOTE: force can be str ('homol'), changing the mode of interaction to homologous from NON homologous
+                       NOTE: force can be str ('homol x'), changing the mode of interaction to homologous from NON homologous
+                             in this case, 'x' gives the displacement in the homologous recognition funnel, L is not included as the energy is per unit length (of each grain)
         R     : float, inter-grain separation.
         
         OUTPUT:
@@ -292,6 +293,9 @@ class Electrostatics:
             dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
             return -1*dE_dRdL
         if ishomol:
+            x = float(Lindex.split(' ')[1])
+            # use energy input WHICH CONTAINS R, x . Current function simply gives bottom of recognition well
+            # this energy function will not take L value, energy will be per unit length
             dE_dR = ( self.find_energy_fc(L, R+h, ishomol) - self.find_energy_fc(L, R, ishomol) ) / h
             return -1*dE_dR
         
@@ -463,34 +467,33 @@ class Strand:
         return 'new' 
     
     def check_repetition(self, other, island, idnti, idntj, R_norm) -> bool:
-        ignore_interaction = False
+        '''
+        IN / OUT ISLAND REQUIREMENT  ***EXPERIMETNAL*** in other file
+        if within the same island, if either idnti OR idntj already there, cut one
+        but if in different islands, cut one ONLY if idnti AND idntj are there
+        
+        R REQUIREMENT
+        if already there, and the interaction is closer, then ignore the new interaction
+        however, if already there but the old interaction is further, remove the previous interaction, and allow the new one
+        '''
+        ignore_interaction = False # default, unless proven otherwise
+        
         if type(island) == int:
-            is_idnti, is_idntj = False, False
+            # within same island
+            idnt_match_index = []
             for i in range(len( self.interactions[island][0] )):
-                is_idnti = True if idnti in self.interactions[island][0][i].split(' ') else is_idnti
-                is_idntj = True if idntj in self.interactions[island][0][i].split(' ') else is_idntj
-                #R_compare = self.interactions[island][1][i]
-            if is_idnti or is_idntj:
-                ignore_interaction = True #if R_compare > R_norm else ignore_interaction
+                idnt_match_index += [i] if idnti in self.interactions[island][0][i].split(' ') else []
+                idnt_match_index += [i] if idntj in self.interactions[island][0][i].split(' ') else []
+            for i in idnt_match_index:
+                R_compare = self.interactions[island][1][i]
+                if R_compare < R_norm:
+                    ignore_interaction = True
+                elif R_compare > R_norm:
+                    # do not ignore, remove previous interaction
+                    self.interactions[island][0].remove(self.interactions[island][0][i])
+                    self.interactions[island][1].remove(self.interactions[island][1][i])
         return ignore_interaction
-    
-    def update_repetitions(self, other, island, idnti, idntj, R_norm):
-        ''' ***OUTDATED*** function, along with repetitions attribute no longer used '''
-        if island == 'new':
-            self.repetitions.append( [[],[]] )
-            island = -1
-        self.repetitions[island][0].append(idnti+' '+idntj)
-        self.repetitions[island][1].append(R_norm)
-        for n in range(self_interaction_limit):
-            for stepi, stepj in [ [-n,0], [0,-n], [n,0], [0,n] ]: # can change this for larger loops until interaction 'reset'
-                if int(idnti[1:])+stepi >= self.num_segments or int(idnti[1:])+stepi < 0 or int(idntj[1:])+stepj >= self.num_segments or int(idntj[1:])+stepj < 0:
-                    continue
-                self.repetitions[island][0] += [idnti[0]+str( int(idnti[1:])+stepi ) + ' ' +  idntj[0]+str( int(idntj[1:])+stepj )]
-                
-                g1 = self.dnastr[ int(idnti[1:])+stepi ] if idnti[0] == 's' else other.dnastr[ int(idnti[1:])+stepi ]
-                g2 = self.dnastr[ int(idntj[1:])+stepj ] if idntj[0] == 's' else other.dnastr[ int(idntj[1:])+stepj ]
-                self.repetitions[island][1] += [ np.linalg.norm( g1.position - g2.position ) - 0.2 ]
-                
+                   
     def assign_L(self, other):
         '''
         Gives 'L' length of interacting dsDNA in 'island' of interaction
@@ -507,8 +510,10 @@ class Strand:
                     Llist += [i]
                 if homology_set:
                     for index, inter in enumerate(isle[0]):
-                        if inter.split(' ')[0][1:] == inter.split(' ')[1][1:] :
-                            Llist[index] = 'homol'
+                        IDi_n = int(inter.split(' ')[0][1:])
+                        IDj_n = int(inter.split(' ')[1][1:])
+                        if abs(IDi_n - IDj_n) <= 15: # assume recognition funnel interaction zero after 3 lc
+                            Llist[index] = 'homol ' + str(abs(IDi_n - IDj_n))
                 isle.append(Llist)
             else:
                 isle.append([])
@@ -616,19 +621,20 @@ class Simulation:
         '''
         correlation_length = 25
         if correlated:
-            fluctuation_size = np.sqrt(2 * correlation_length*grain_mass * gamma * kb * temp / dt)
-            for grain in self.StrandA.dnastr + self.StrandB.dnastr:
-                # Drag force
-                damping_force = -gamma * grain.velocity # with gamma = 1, zeroes previous velocity -> Brownian
-                # apply drag, using 'trick' dt=1 to rescale velocity fully
-                grain.update_velocity(damping_force, 1)
+            fluctuation_size = np.sqrt(2 * correlation_length*grain_mass * gamma * kb * temp / dt)         
             for strand in [self.StrandA,self.StrandB]:
                 for n in range(correlation_length, strand.num_segments+1, correlation_length):
                     for grains in [strand.dnastr[n-correlation_length:n]]:
-                        # Random thermal force
+                        # Random thermal force, applied across correlation_length
                         random_force = np.random.normal(0, fluctuation_size, size=3) 
                         for g in grains:
+                            # Drag force
+                            damping_force = -gamma * g.velocity # with gamma = 1, zeroes previous velocity -> Brownian
+                            # apply drag, using 'trick' dt=1 to rescale velocity fully
+                            g.update_velocity(damping_force, 1)
+                            # Thermal force
                             g.update_velocity(random_force,dt)
+                            
         
         elif not correlated:
             fluctuation_size = np.sqrt(2 * grain_mass * gamma * kb * temp / dt)
@@ -754,4 +760,5 @@ class Simulation:
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
         return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
+    
     
