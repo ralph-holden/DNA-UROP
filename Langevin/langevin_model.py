@@ -40,22 +40,34 @@ kappab = lp * kb * temp # bending stiffness
 s = 0.4 # standard distance through chain separated by one Grain
 k_bend = kappab/s # Bending stiffness constant
 
-k_spring = 300*kb  # Spring constant for bonds
+k_spring = 300000*kb  # Spring constant for bonds
 
 # Simulation Interaction Parameters
-R_cut = 0.3 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
+R_cut = 0.125 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 5 # avoid interactions between grains in same strand
 homology_set = False # False -> NON homologous
 
 # Langevin 
+dt = 0.0000001 # timestep, per unit mass 
 dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
 #dynamic_coefficient_friction *= 10**8/(Boltzmann*300)
 l_kuhn = lp # persistence length
 gamma = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
-gamma = 0.5 # reset gamma FOR NOW
-dt = 0.00005 # timestep, per unit mass
+
+# Use Kroger with very large gamma (actually coefficient of friction in this case)
+# Or not, with normal 0 < gamma < 1
+gamma = 1/dt # reset gamma FOR NOW
+
 correlation_length = 25 # number of grains with (fully) correlated fluctuations
 grain_mass = 1
+
+# define parameters for Langevin modified Velocity-Verlet algorithm - M. Kroger
+half_dt = dt/2
+applied_friction_coeff = (2 - gamma*dt)/(2 + gamma*dt)
+fluctuation_size = np.sqrt( grain_mass * kb * temp * gamma * half_dt ) # takes dt into account. should it be /grain_mass ?
+rescaled_position_step = 2*dt / (2 + gamma*dt)
+
+
 
 # # # Aux functions # # #
 class Start_position:
@@ -326,15 +338,16 @@ class Grain():
     def __init__(self, position: np.array, velocity: np.array, radius = 0.1):
         self.position = np.array(position, dtype=np.float64)
         self.velocity = np.array(velocity, dtype=np.float64)
+        self.ext_force = np.zeros(3, dtype=np.float64)
         self.radius = radius
 
-    def update_velocity(self, force, dt):
-        # Update velocity based on the applied force
-        self.velocity += force / grain_mass * dt
-
-    def update_position(self, dt):
+    def update_position(self, timestep):
         # Update position based on the velocity
-        self.position += self.velocity * dt
+        # from Simulation.run_step() -> timestep = rescaled_position_step
+        self.position += self.velocity * timestep
+        
+    def update_force(self, ext_force):
+        self.ext_force += ext_force
         
     def copy(self):
         return Grain(self.position, self.velocity, self.radius)
@@ -371,8 +384,28 @@ class Strand:
             force_magnitude = k_spring * (distance - 2*self.dnastr[0].radius)
             force_direction = delta / distance if distance != 0 else np.zeros(3)
             force = force_magnitude * force_direction
-            self.dnastr[i].update_velocity(force, dt)
-            self.dnastr[i+1].update_velocity(-force, dt)
+            self.dnastr[i].update_force(force)
+            self.dnastr[i+1].update_force(-force)
+            #print(f'bond force: {force}')
+            
+    def apply_distance_constraints(self):
+        for i in range(self.num_segments-1):
+            grain1 = self.dnastr[i]
+            grain2 = self.dnastr[i+1]
+            
+            p1 = grain1.position
+            p2 = grain2.position
+            inter_vector = p2 - p1
+            
+            distance = np.linalg.norm( inter_vector )
+            required_distance = grain1.radius+grain2.radius
+            
+            if np.isclose(distance, required_distance):
+                continue # does not need adjustment
+            
+            # adjust all others
+            for j in range(i+1,self.num_segments):
+                self.dnastr[j].position += inter_vector * (required_distance - distance)
                 
     # WLC bending energies
     def f_wlc(self):
@@ -391,9 +424,10 @@ class Strand:
             torque_direction = r1+r2
             torque_direction /= np.linalg.norm(torque_direction) if np.linalg.norm(torque_direction) != 0 else 1
             torque = torque_magnitude * torque_direction
-            self.dnastr[i-1].update_velocity(-torque, dt)
-            self.dnastr[i].update_velocity(torque, dt)
-            self.dnastr[i+1].update_velocity(-torque, dt)
+            self.dnastr[i-1].update_force(-torque)
+            self.dnastr[i].update_force(torque)
+            self.dnastr[i+1].update_force(-torque)
+            #print(f'bend force: {torque}')
         
     def find_angle(self, seg_index):
         p1 = self.dnastr[seg_index-1].position
@@ -405,7 +439,7 @@ class Strand:
             return 0
         # return 180 - angle
         return np.pi - np.arccos(np.dot(p3-p2,p1-p2) / (np.linalg.norm(p3-p2)*np.linalg.norm(p1-p2) ) )
-        
+    
     # electrostatic interaction
     def find_interactions(self, other) -> list:
         '''
@@ -542,8 +576,9 @@ class Strand:
                 grain2 = self.dnastr[ int(idnt2[1:]) ] if idnt2[0]=='s' else other.dnastr[ int(idnt2[1:]) ]
                 fvec = grain2.position - grain1.position
                 fvec /= np.linalg.norm(fvec) if np.linalg.norm(fvec) != 0 else 1
-                grain1.update_velocity(+1*felstat*fvec,dt)
-                grain2.update_velocity(-1*felstat*fvec,dt)
+                grain1.update_force(+1*felstat*fvec)
+                grain2.update_force(-1*felstat*fvec)
+                #print(f'elstats force: {+1*felstat*fvec}')
         
     # for energies, not including bond springs or translational energy
     def eng_elstat(self, other, homol=False):
@@ -606,17 +641,48 @@ class Simulation:
         self.interactions_traj = []
         #self.record()
 
+    # for time integration / evolution
     def run_step(self):
-        self.apply_langevin_dynamics(correlated=True)
+        '''
+        Langevin Modified Velocity-Verlet Algorithm
+        Taken from Models for polymeric and anisotropic liquids, M. Kröger, 2005
+        '''
+        # reset and calculate external forces, information stored in Grain attribute
+        self.calc_external_force()
+        
+        # take random fluctuation length for each 'correlation length'
+        fluctuation_list = self.langevin_fluctuations()
+        
+        self.update_velocities_first_halfstep( fluctuation_list )
+        
+        self.update_positions()
+        #self.StrandA.apply_distance_constraints(), self.StrandB.apply_distance_constraints()
+        
+        # reset and calculate external forces
+        self.calc_external_force()
+        
+        self.update_velocities_second_halfstep( fluctuation_list )
+        
+        # save data
+        self.record()
+        
+    def calc_external_force(self):
+        '''
+        Reset and calculate the external force acting on each grain
+        '''
+        # reset Grain attribute ext_force 
+        for g in self.StrandA.dnastr + self.StrandB.dnastr:
+            g.ext_force = np.zeros(3, dtype=np.float64)
+        # find external force from chain bond, bending, electrostatics and boundary conditions
         self.StrandA.f_bond(), self.StrandB.f_bond()
         self.StrandA.f_wlc(), self.StrandB.f_wlc() 
         self.StrandA.f_elstat(self.StrandB)
         self.apply_box()
-        self.update_positions()
-        self.record()
         
-    def apply_langevin_dynamics(self, correlated=True):
+    def langevin_fluctuations(self, correlated=True):
         '''
+        Build list of fluctuations for each grain. Correlated within each Kuhn length.
+        
         correlated = True (default)
         Applies UNcorrellated brownian force to each 'correlation length'
         Fully correllated within fluctuation 'correlation length'
@@ -624,32 +690,34 @@ class Simulation:
         correlated = False
         Random, uncorrelated force applied to each individual particle, 1/5 coherence length
         '''
-        if correlated:
-            fluctuation_size = np.sqrt(2 * correlation_length*grain_mass * gamma * kb * temp / dt)         
-            for strand in [self.StrandA,self.StrandB]:
-                for n in range(correlation_length, strand.num_segments+1, correlation_length):
-                    for grains in [strand.dnastr[n-correlation_length:n]]:
-                        # Random thermal force, applied across correlation_length
-                        random_force = np.random.normal(0, fluctuation_size, size=3) 
-                        for g in grains:
-                            # Drag force
-                            damping_force = -gamma * g.velocity # with gamma = 1, zeroes previous velocity -> Brownian
-                            # apply drag, using 'trick' dt=1 to rescale velocity fully
-                            g.update_velocity(damping_force, 1)
-                            # Thermal force
-                            g.update_velocity(random_force,dt)
-                            
-        elif not correlated:
-            fluctuation_size = np.sqrt(2 * grain_mass * gamma * kb * temp / dt)
-            for grain in self.StrandA.dnastr + self.StrandB.dnastr:
-                # Drag force
-                damping_force = -gamma * grain.velocity # with gamma = 1, zeroes previous velocity -> Brownian
-                # apply drag, using 'trick' dt=1 to rescale velocity fully
-                grain.update_velocity(damping_force, 1)
-                # Random thermal force
-                random_force = np.random.normal(0, fluctuation_size, size=3) 
-                # Damping force
-                grain.update_velocity(random_force,dt)
+        fluctuation_list = []
+        for strand in [self.StrandA,self.StrandB]:
+            for n in range(correlation_length, strand.num_segments+1, correlation_length):
+                for grains in [strand.dnastr[n-correlation_length:n]]:
+                    # Random thermal force, applied across correlation_length
+                    random_force = np.random.normal(0, fluctuation_size, size=3) * 10**-8 # RESCALED
+                    # Add to fluctuation_list, for use in 1st & 2nd velocity steps
+                    for g in grains:
+                        fluctuation_list.append(random_force)
+        return fluctuation_list
+        
+    def update_velocities_first_halfstep(self, fluctuation_list):
+        for i, grain in enumerate(self.StrandA.dnastr + self.StrandB.dnastr):
+            grain.velocity += half_dt * grain.ext_force / grain_mass # apply external force
+            grain.velocity += fluctuation_list[i] # apply fluctuation 
+    
+    def update_positions(self):
+        for grain in self.StrandA.dnastr + self.StrandB.dnastr:
+            grain.update_position( rescaled_position_step )
+            #grain.update_position( dt )
+            
+            
+    def update_velocities_second_halfstep(self, fluctuation_list):
+        for i, grain in enumerate(self.StrandA.dnastr + self.StrandB.dnastr):
+            grain.velocity *= applied_friction_coeff # apply friction
+            #grain.velocity -= grain.velocity * gamma # or half_step_langevin # apply friction
+            grain.velocity += half_dt * grain.ext_force / grain_mass # apply external force
+            grain.velocity += fluctuation_list[i] # apply fluctuation 
             
     def apply_box(self):
         '''
@@ -668,12 +736,9 @@ class Simulation:
                         continue
             if not np.isclose(np.linalg.norm(returning_force), 0):
                     for grain in strand.dnastr:
-                        grain.update_velocity(returning_force, dt)
-       
-    def update_positions(self):
-        for grain in self.StrandA.dnastr + self.StrandB.dnastr:
-            grain.update_position(dt)
-            
+                        #print(f'box force {returning_force}')
+                        grain.update_force(returning_force)
+      
     # for data analysis
     def record(self):
         
