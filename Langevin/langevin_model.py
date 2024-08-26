@@ -8,7 +8,8 @@ MODEL:
     polymer bead model - Worm-like-Chain, including excluded volume and specialised dsDNA interactions
     beads correspond to 1/5 correlation length as described in Kornyshev-Leiken theory
         as such, for non homologous DNA, only one consecutive helical coherence length can have attractive charged double helix interactions
-   
+   NOTE: edge effects not accounted for
+    
 CODE & SIMULATION:
     Langevin dynamics (a Monte Carlo method) used to propagate each grain in the dsDNA strands
     Additional forces involved are; 
@@ -42,7 +43,7 @@ k_bend = kappab/s # Bending stiffness constant
 k_spring = 300*kb  # Spring constant for bonds
 
 # Simulation Interaction Parameters
-R_cut = 0.75 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
+R_cut = 0.3 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 5 # avoid interactions between grains in same strand
 homology_set = False # False -> NON homologous
 
@@ -52,10 +53,9 @@ dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 a
 l_kuhn = lp # persistence length
 gamma = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
 gamma = 0.5 # reset gamma FOR NOW
-dt = 0.00001 # timestep, per unit mass
-grain_mass = 1
+dt = 0.00005 # timestep, per unit mass
 correlation_length = 25 # number of grains with (fully) correlated fluctuations
-
+grain_mass = 1
 
 # # # Aux functions # # #
 class Start_position:
@@ -291,13 +291,13 @@ class Electrostatics:
         # mixed differentiation by first principles, NOTE: could use analytical derivative to save computational cost
         if not ishomol:
             dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
-            return -1*dE_dRdL
+            return -1*dE_dRdL * 10**-8
         if ishomol:
             x = float(Lindex.split(' ')[1])
             # use energy input WHICH CONTAINS R, x . Current function simply gives bottom of recognition well
             # this energy function will not take L value, energy will be per unit length
             dE_dR = ( self.find_energy_fc(L, R+h, ishomol) - self.find_energy_fc(L, R, ishomol) ) / h
-            return -1*dE_dR
+            return -1*dE_dR   * 10**-8
         
     def plot_energy_map(self):
         '''Must be used after gen_energy_map()'''
@@ -371,8 +371,8 @@ class Strand:
             force_magnitude = k_spring * (distance - 2*self.dnastr[0].radius)
             force_direction = delta / distance if distance != 0 else np.zeros(3)
             force = force_magnitude * force_direction
-            self.dnastr[i].update_velocity(force, 1)
-            self.dnastr[i+1].update_velocity(-force, 1)
+            self.dnastr[i].update_velocity(force, dt)
+            self.dnastr[i+1].update_velocity(-force, dt)
                 
     # WLC bending energies
     def f_wlc(self):
@@ -482,16 +482,21 @@ class Strand:
             # within same island
             idnt_match_index = []
             for i in range(len( self.interactions[island][0] )):
+                if idnti + ' ' + idntj == self.interactions[island][0][i]:
+                    continue
                 idnt_match_index += [i] if idnti in self.interactions[island][0][i].split(' ') else []
                 idnt_match_index += [i] if idntj in self.interactions[island][0][i].split(' ') else []
             for i in idnt_match_index:
                 R_compare = self.interactions[island][1][i]
-                if R_compare < R_norm:
+                if R_compare < R_norm or np.isclose(R_norm,R_compare):
                     ignore_interaction = True
+                    return ignore_interaction
                 elif R_compare > R_norm:
                     # do not ignore, remove previous interaction
                     self.interactions[island][0].remove(self.interactions[island][0][i])
                     self.interactions[island][1].remove(self.interactions[island][1][i])
+                    for i in range(len(idnt_match_index)):
+                        idnt_match_index[i] -= 1
         return ignore_interaction
                    
     def assign_L(self, other):
@@ -619,7 +624,6 @@ class Simulation:
         correlated = False
         Random, uncorrelated force applied to each individual particle, 1/5 coherence length
         '''
-        correlation_length = 25
         if correlated:
             fluctuation_size = np.sqrt(2 * correlation_length*grain_mass * gamma * kb * temp / dt)         
             for strand in [self.StrandA,self.StrandB]:
@@ -635,7 +639,6 @@ class Simulation:
                             # Thermal force
                             g.update_velocity(random_force,dt)
                             
-        
         elif not correlated:
             fluctuation_size = np.sqrt(2 * grain_mass * gamma * kb * temp / dt)
             for grain in self.StrandA.dnastr + self.StrandB.dnastr:
