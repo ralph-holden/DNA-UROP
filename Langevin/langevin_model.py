@@ -29,6 +29,22 @@ from typing import Tuple
 from scipy import special
 from scipy.constants import epsilon_0, Boltzmann
 
+import sys
+import os
+
+# Get the directory of the current script
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Construct the absolute path to the target folder
+target_dir = os.path.join(script_dir, '../Electrostatics_functions/')
+
+# Add the target directory to sys.path
+sys.path.insert(0, os.path.abspath(target_dir))
+
+# Now try to import the module
+from Electrostatics_classholder import Electrostatics
+
+
 # # # UNITS # # #
 kb = 1 # 1.38e-23
 temp = 310.15
@@ -36,36 +52,33 @@ temp = 310.15
 # # # PARAMETERS # # #
 # Worm Like Chain Bending
 lp = 5 # persistence length, in coherence length diameter grains of 100 Angstroms
-kappab = lp * kb * temp # bending stiffness
+kappab = lp * kb * 300 # bending stiffness
 s = 0.4 # standard distance through chain separated by one Grain
 k_bend = kappab/s # Bending stiffness constant
 
 k_spring = 300000*kb  # Spring constant for bonds
 
 # Simulation Interaction Parameters
-R_cut = 0.125 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
+R_cut = 0.6 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 5 # avoid interactions between grains in same strand
 homology_set = False # False -> NON homologous
 
 # Langevin 
-dt = 0.0000001 # timestep, per unit mass 
+dt = 0.0000001 *10000 # timestep, per unit mass 
 dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
 #dynamic_coefficient_friction *= 10**8/(Boltzmann*300)
 l_kuhn = lp # persistence length
 gamma = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
 
-# Use Kroger with very large gamma (actually coefficient of friction in this case)
-# Or not, with normal 0 < gamma < 1
-gamma = 1/dt # reset gamma FOR NOW
-
-correlation_length = 25 # number of grains with (fully) correlated fluctuations
+correlation_length = 5 # number of grains with (fully) correlated fluctuations
 grain_mass = 1
 
 # define parameters for Langevin modified Velocity-Verlet algorithm - M. Kroger
+xi = 2/dt * 0.5 # used instead of gamma for Langevin modified Velocity-Verlet
 half_dt = dt/2
-applied_friction_coeff = (2 - gamma*dt)/(2 + gamma*dt)
-fluctuation_size = np.sqrt( grain_mass * kb * temp * gamma * half_dt ) # takes dt into account. should it be /grain_mass ?
-rescaled_position_step = 2*dt / (2 + gamma*dt)
+applied_friction_coeff = (2 - xi*dt)/(2 + xi*dt)
+fluctuation_size = np.sqrt( grain_mass * kb * temp * xi * half_dt ) # takes dt into account. should it be /grain_mass ?
+rescaled_position_step = 2*dt / (2 + xi*dt)
 
 
 
@@ -143,191 +156,6 @@ class Start_position:
         plt.show()
 
 
-
-# # # ELECTROSTATICS # # #
-class Electrostatics:
-    ''' 
-    Electrostatic helical interaction as described by Kornyshev - Leikin theory
-    From 'Sequence Recognition in the Pairing of DNA Duplexes', Kornyshev & Leikin, 2001, DOI: 10.1103/PhysRevLett.86.3666
-    
-    NOTE: uses real units of metres for length, but energy in kbT, therefore force in kbT per metre
-    '''
-    # constants
-    eps = 80 # ~dielectric constant water
-    r = 9 * 10**-10 # radius phosphate cylinder, in metres
-    sigma = 16.8 # phosphate surface change density, in micro coulombs per cm^2
-    sigma /= 10**-6 * (10**2)**2 # in coulombs per m^2
-    theta = 0.8 # fraction phosphate charge neutralised by adsorbed counterions
-    f1, f2, f3 = 0.7, 0.3, 0 # fraction of counterions on; double heix minor groove, major groove, phosphate backbone
-    debye = 7 * 10**-10 # Debye length (kappa^-1), in metres
-    H = 34 * 10**-10 # Helical pitch, in metres
-    lamb_c = 100 * 10**-10 # helical coherence length, in metres. NOTE: more recent estimate NOT from afformentioned paper
-    coeffs = 16 * np.pi**2 * sigma**2 / eps # coefficients for 'a' terms, apply at end of calculations, for Eint. NOTE: requires a0 to have a prefactor of 1/2
-    
-    def __init__(self, homol=False):
-        self.homol = homol     
-        
-    def kappa(self, n):
-        return np.sqrt( 1/self.debye**2  +  n**2 * (2*np.pi / self.H)**2 ) # when n=0 kappa = 1/debye
-        
-    def f(self, n):
-        return self.f1 * self.theta  +  self.f2 * (-1)**n * self.theta  -  (1 - self.f3*self.theta) * np.cos(0.4 * n * np.pi)    
-
-    def nu(self, n, L):
-        x = n**2 * L / self.lamb_c
-        return ( 1 - np.exp(-x) ) / x 
-    
-    def a(self, R: float) -> tuple([float, float, float]):
-        '''
-        Finds 'a' terms for a_0, a_1, a_2 @ R
-        For a_0 term, pairwise sum from -inf to +inf approximated as -1 to 1 (including zero)
-        For gen_energy_map(), R input can be array
-        
-        NOTE: w/out coeff factor, applied only @ Eint calculation, a0 has a prefactor of 1/2
-        '''
-        a0_coeff = 1/2
-        a0_term1 = (1-self.theta)**2 * special.kn(0, R/self.debye ) / ( (1/self.debye**2) * special.kn(1, self.r/self.debye )**2 )
-        a0_term2 = 0
-        for j in range(-1,2):
-            for n in range(-1,2):
-                a0_term2 += self.f(n)**2 / self.kappa(n)**2  *  special.kn(n-j, self.kappa(n)*R)**2 * special.ivp(j, self.kappa(n)*self.r)  /  (  special.kvp(n, self.kappa(n)*self.r)**2 * special.kvp(j, self.kappa(n)*self.r)  ) 
-        a0 = a0_coeff * (a0_term1 - a0_term2)
-        a1 = self.f(1)**2 / self.kappa(1)**2 * special.kn(0, self.kappa(1)*R ) / special.kvp(1, self.kappa(1)*self.r )**2
-        a2 = self.f(2)**2 / self.kappa(2)**2 * special.kn(0, self.kappa(2)*R ) / special.kvp(2, self.kappa(2)*self.r )**2
-
-        return a0, a1, a2
-
-    def gen_energy_map(self):
-        ''' 
-        INPUTS:
-        homol : bool , controls output for homologous and non homologous sequences, default = False.
-        
-        OUTPUT:
-        Eint  : 2D np.array, electrostatic internal energy contribution, function of L & R.
-                for homol = False -- NON homologous interaction (default)
-                for homol = True  -- HOMOLOGOUS interaction
-        '''
-        Lmin = 20  * 10**-10
-        Lmax = 300 * 10**-10
-        Lstep = 20 * 10**-10 # grain diameter
-        Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-    
-        Rmin = 0.9 * 10**-10
-        Rmax = 10 * 10**-10 # same as R_cut = 0.1 * 100*10**-10
-        Rstep = 0.01 * 10**-10
-        Rrange = np.linspace( Rmin, Rmax, int((Rmax-Rmin)/(Rstep))+1 )
-        
-        Lrange, Rrange = np.meshgrid(Lrange, Rrange)
-        self.Lrange = Lrange
-        self.Rrange = Rrange
-        
-        self.a0, self.a1, self.a2 = self.a(Rrange)
-
-        if not self.homol:
-            self.Eint = self.coeffs * ( self.a0  -  self.nu(1, Lrange) * self.a1 * np.cos(np.arccos(self.a1/(4*self.a2)))  +  self.nu(2, Lrange) * self.a2 * np.cos(2*np.arccos(self.a1/(4*self.a2))) ) * Lrange
-        elif self.homol:
-            self.Eint = self.coeffs * ( self.a0  -  self.a1*np.cos(np.arccos(self.a1/(4*self.a2)))  +  self.a2*np.cos(2*np.arccos(self.a1/(4*self.a2))) ) * Lrange
-        
-        self.Eint *= (4*np.pi*epsilon_0)
-        self.Eint /= (Boltzmann * 300) 
-        self.Eint *= 10**8 # multiply by l_0 for factor of L[m] to L[l_c]
-
-    def find_energy(self, Lindex: int, R: float, ishomol = False):
-        '''
-        Finds energy of ONE L, R point
-        For use in Strand energy calculations
-        '''
-        
-        Lmin = 20  * 10**-10
-        Lmax = 100000 * 10**-10
-        Lstep = 20 * 10**-10 # grain diameter
-        Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-        L = Lrange[Lindex-1] if not ishomol else 1
-        
-        a0, a1, a2 = self.a(R)
-
-        SP_min_factor = np.cos(np.arccos(np.clip(a1/(4*a2), -1, 1))) if abs(a2) > 10**-10 else np.cos(np.pi) # avoid dividing by zero error
-        
-        if not ishomol: 
-            Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
-        elif ishomol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * 1 # one unit of L
-            
-        Eint *= (4*np.pi*epsilon_0)
-        Eint /= (Boltzmann * 300) # from gaussian to in kbT units
-        
-        return Eint
-    
-    def find_energy_fc(self, L: float, R: float, ishomol = False):
-        '''
-        Finds energy of ONE L, R point with fully continuous (fc) inputs 
-        For use in find_force(), where dE/dRdL required
-        Additional boolean input from force() function, default NON homologous
-        For use in force()
-        '''
-        a0, a1, a2 = self.a(R)
-        
-        SP_min_factor = np.cos(np.arccos(np.clip(a1/(4*a2), -1, 1))) if abs(a2) > 10**-10 else np.cos(np.pi) # avoid dividing by zero error
-        
-        if not ishomol: 
-            Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor ) * L
-        elif ishomol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * 1
-        
-        Eint *= (4*np.pi*epsilon_0)
-        Eint /= (Boltzmann * 300) # from gaussian to in kbT units
-        
-        return Eint
-
-    def force(self, Lindex: int, R: float):
-        '''         
-        INPUTS:
-        Lindex: int  , index of truncated grain pairing interaction, one unit is 0.2 lamb_c. NOTE: can be a numpy array (1D)
-                       NOTE: force can be str ('homol x'), changing the mode of interaction to homologous from NON homologous
-                             in this case, 'x' gives the displacement in the homologous recognition funnel, L is not included as the energy is per unit length (of each grain)
-        R     : float, inter-grain separation.
-        
-        OUTPUT:
-        Force  : float, magnitude (including +-) of electrostatic interaction
-                 negative gradient of energy with respect to separation, R 
-        '''
-        ishomol = type(Lindex) == str # for individual interaction, allows for non homologous interactions within homologous system
-        
-        Lmin = 20  * 10**-10
-        Lmax = 100000 * 10**-10
-        Lstep = 20 * 10**-10 # grain diameter
-        Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-        L = Lrange[Lindex-1] if not ishomol else 1
-        
-        h = 0.0001 * 10**-10 # for differentiation by first principles
-        # mixed differentiation by first principles, NOTE: could use analytical derivative to save computational cost
-        if not ishomol:
-            dE_dRdL = ( self.find_energy_fc(L-h, R-h) + self.find_energy_fc(L+h, R+h) - self.find_energy_fc(L-h, R+h) - self.find_energy_fc(L+h, R-h) ) / ( 4*h**2 )
-            return -1*dE_dRdL * 10**-8
-        if ishomol:
-            x = float(Lindex.split(' ')[1])
-            # use energy input WHICH CONTAINS R, x . Current function simply gives bottom of recognition well
-            # this energy function will not take L value, energy will be per unit length
-            dE_dR = ( self.find_energy_fc(L, R+h, ishomol) - self.find_energy_fc(L, R, ishomol) ) / h
-            return -1*dE_dR   * 10**-8
-        
-    def plot_energy_map(self):
-        '''Must be used after gen_energy_map()'''
-        x, y = self.Lrange, self.Rrange
-        z = self.Eint
-        
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection='3d')
-        
-        surf = ax.plot_surface(x, y, z, cmap='viridis', alpha=0.7)
-        
-        fig.colorbar(surf)
-        
-        ax.set_xlabel('L (m)')
-        ax.set_ylabel('R (m)')
-        ax.set_zlabel('Eint (kbT)')
-        
-        plt.show()
 
 # Pairing interaction energy
 elstats = Electrostatics(homol = homology_set)
@@ -425,7 +253,7 @@ class Strand:
             torque_direction /= np.linalg.norm(torque_direction) if np.linalg.norm(torque_direction) != 0 else 1
             torque = torque_magnitude * torque_direction
             self.dnastr[i-1].update_force(-torque)
-            self.dnastr[i].update_force(torque)
+            #self.dnastr[i].update_force(torque)
             self.dnastr[i+1].update_force(-torque)
             #print(f'bend force: {torque}')
         
@@ -597,7 +425,7 @@ class Strand:
                 if not ishomol:
                     energy +=  elstats.find_energy(g_L, g_R) - elstats.find_energy(g_L-1, g_R) # remove 'built-up' energy over L w/ different R
                 elif ishomol:
-                    energy += elstats.find_energy(1, g_R, ishomol=True) # energy is per unit length
+                    energy += elstats.find_energy(g_L, g_R) # energy is per unit length
         return energy
         
     def eng_elastic(self) -> float:
