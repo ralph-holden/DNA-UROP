@@ -6,7 +6,7 @@ Created on Fri Jul 19 10:20:05 2024
 """
 # # # IMPORTS # # #
 from langevin_model import Grain, Strand, Simulation, Start_position, np, Tuple, combinations
-from langevin_model import kb, temp, kappab, lp, dt, gamma, homology_set
+from langevin_model import kb, temp, kappab, lp, dt, gamma, homology_set, xi
 import pickle
 import sys
 import logging
@@ -21,16 +21,16 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
 nsteps = 10000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 20
+coherence_lengths = 15
 curved = False
 nsegs = 5 * coherence_lengths 
 ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 3.5
+sep = 0.6
 sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 15, 15, 15 # from -lim to +lim 
+xlim, ylim, zlim = 12, 12, 12 # from -lim to +lim 
 
 
 
@@ -49,8 +49,8 @@ spA = Start_position(nsegs, xstartA, ystart, 0)
 Strand1 = spA.create_strand_curved() if curved else spA.create_strand_straight()
 
 # rewrite settings to have one curved strand
-curved = True
-ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
+#curved = True
+#ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
 
 spB = Start_position(nsegs, xstartB, ystart, 0)
 Strand2 = spB.create_strand_curved() if curved else spB.create_strand_straight()
@@ -65,6 +65,7 @@ logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message
 logging.info('Simulation started')
 logging.info(f'''Simulation parameters:
     gamma    : {gamma}
+    xi       : {xi}
     dt       : {dt}
     nsteps   : {nsteps}
     num parts: {nsegs}
