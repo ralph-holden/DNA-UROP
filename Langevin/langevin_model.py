@@ -53,8 +53,8 @@ temp = 310.15
 # Worm Like Chain Bending
 lp = 5 # persistence length, in coherence length diameter grains of 100 Angstroms
 kappab = lp * kb * 300 # bending stiffness
-s = 0.4 # standard distance through chain separated by one Grain
-k_bend = kappab/s # Bending stiffness constant
+s = 0.2 # standard distance through chain separated by one Grain
+k_bend = kappab/(2*s) # Bending stiffness constant
 
 k_spring = 300000*kb  # Spring constant for bonds
 
