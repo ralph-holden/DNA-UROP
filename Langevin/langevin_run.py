@@ -19,19 +19,20 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 10000
+nsteps = 1000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 15
+coherence_lengths = 10
 curved = False
 nsegs = 5 * coherence_lengths 
 ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 0.6
+sep = 0.3
 sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 12, 12, 12 # from -lim to +lim 
-
+xlim, ylim, zlim = 12, 12, 12 # from -lim to +lim
+# starting shift 
+yshift = 0.0
 
 
 # # # DATA OUTPUT PARAMETERS # # #
@@ -40,12 +41,12 @@ save_data = False
 log_update = 100 # how often to publish values to the log file
 # animation?
 animate = True
-frame_hop = 100 # frame dump frequency
+frame_hop = 10 # frame dump frequency
 
 
 
 # # # INITIALISE & RUN SIMULATION # # #
-spA = Start_position(nsegs, xstartA, ystart, 0)
+spA = Start_position(nsegs, xstartA, ystart+yshift, 0)
 Strand1 = spA.create_strand_curved() if curved else spA.create_strand_straight()
 
 # rewrite settings to have one curved strand
