@@ -122,17 +122,16 @@ class Electrostatics:
         Lmax = 100000 * 10**-10
         Lstep = 20 * 10**-10 # grain diameter
         Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-        L = Lrange[Lindex-1] if not ishomol else 1
+        L = Lrange[Lindex-1] if not ishomol else int(Lindex.split(' ')[1])
         L0 = 18e-8
             
         if not ishomol: 
             Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor )
-            Eint *= L0 #**Lindex
             
         elif ishomol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) 
-            Eint *= L0 #**Lindex
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * np.exp( -L/5 )
             
+        Eint *= L0 #**Lindex
         Eint /= Boltzmann
 
         return Eint
@@ -167,8 +166,8 @@ class Electrostatics:
         Lmax = 100000 * 10**-10
         Lstep = 20 * 10**-10 # grain diameter
         Lrange = np.linspace( Lmin, Lmax, int((Lmax-Lmin)/(Lstep))+1 )
-        L = Lrange[Lindex-1] if not ishomol else 1
-        L0 = 18e-8
+        L = Lrange[Lindex-1] if not ishomol else int(Lindex.split(' ')[1])
+        L0 = 18e-8 # # # needs adjustment so can be used for sims with both real and lc units # # # 
             
         if not ishomol: 
             Eint = self.coeffs * ( a0  -  self.nu(1, L) * a1 * SP_min_factor  +  self.nu(2, L) * a2 * SP_min_factor )
@@ -176,7 +175,7 @@ class Electrostatics:
             Force = -np.gradient(Eint)[4]
             
         elif ishomol:
-            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) 
+            Eint = self.coeffs * ( a0  -  a1 * SP_min_factor  +  a2 * SP_min_factor ) * np.exp( -L/5 )
             Eint *= L0 #**Lindex
             Force = -np.gradient(Eint)[4]
             
