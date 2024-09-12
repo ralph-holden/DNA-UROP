@@ -50,7 +50,7 @@ s = 0.4 # standard distance through chain between three grains
 k_bend = kappab/(2*s) # Bending stiffness constant
 
 # Spring constant for bonds
-k_spring = 3000000*kb
+k_spring = 30000000*kb
 
 # Simulation Interaction Parameters
 R_cut = 0.6 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
@@ -64,7 +64,7 @@ l_kuhn = lp # persistence length
 slender_body = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
 gamma = 0.5 # or slender body
 
-correlation_length = 25 # number of grains with (fully) correlated fluctuations
+correlation_length = 5 # number of grains with (fully) correlated fluctuations
 grain_mass = 1
 
 # define parameters for Langevin modified Velocity-Verlet algorithm - M. Kroger
@@ -292,7 +292,9 @@ class Strand:
             torque_direction = r1+r2
             torque_direction /= np.linalg.norm(torque_direction) if np.linalg.norm(torque_direction) != 0 else 1
             torque = torque_magnitude * torque_direction
+            #self.dnastr[i-1].update_force(-torque)
             self.dnastr[i].update_force(torque)
+            #self.dnastr[i+1].update_force(-torque)
         
     def find_angle(self, seg_index):
         p1 = self.dnastr[seg_index-1].position
@@ -442,10 +444,8 @@ class Strand:
                 grain2 = self.dnastr[ int(idnt2[1:]) ] if idnt2[0]=='s' else other.dnastr[ int(idnt2[1:]) ]
                 fvec = grain2.position - grain1.position
                 fvec /= np.linalg.norm(fvec) if np.linalg.norm(fvec) != 0 else 1
-                fvec = 10000
                 grain1.update_force(+1*felstat*fvec)
                 grain2.update_force(-1*felstat*fvec)
-                #print(f'elstats force: {+1*felstat*fvec}')
                 
     def f_homology_recognition(self, other):
         k_recognition = 10000 # need to choose value
@@ -592,7 +592,7 @@ class Simulation:
             for n in range(correlation_length, strand.num_segments+1, correlation_length):
                 for grains in [strand.dnastr[n-correlation_length:n]]:
                     # Random thermal force, applied across correlation_length
-                    random_force = np.random.normal(0, fluctuation_size, size=3) #* 10**-8 # RESCALED
+                    random_force = np.random.normal(0, fluctuation_size, size=3) 
                     if no_fluctuations:
                         random_force = np.zeros(3) # for zeroing fluctuations
                     # Add to fluctuation_list, for use in 1st & 2nd velocity steps
@@ -727,6 +727,3 @@ class Simulation:
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
         return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
-    
-    
-    
