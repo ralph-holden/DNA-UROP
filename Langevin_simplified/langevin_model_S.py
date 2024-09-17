@@ -27,15 +27,16 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple
 from scipy import special
+from scipy import signal
 from scipy.constants import epsilon_0, Boltzmann
 
 import sys
-##import os
+import os
 
-##script_dir = os.path.dirname(os.path.abspath(__file__))
-##target_dir = os.path.join(script_dir, '../Electrostatics_functions/')
-##sys.path.insert(0, os.path.abspath(target_dir))
-##from Electrostatics_classholder import Electrostatics
+script_dir = os.path.dirname(os.path.abspath(__file__))
+target_dir = os.path.join(script_dir, '../Electrostatics_functions/')
+sys.path.insert(0, os.path.abspath(target_dir))
+from Electrostatics_classholder import Electrostatics
 
 
 # # # UNITS # # #
@@ -53,7 +54,7 @@ k_bend = kappab/(2*s) # Bending stiffness constant
 k_spring = 30000000*kb
 
 # Simulation Interaction Parameters
-R_cut = 0.8 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
+R_cut = 0.4 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 6 # avoid interactions between grains in same strand
 wall_dist = 0.2
 ##homology_set = True # False -> NON homologous
@@ -65,7 +66,7 @@ l_kuhn = lp # persistence length
 slender_body = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
 gamma = 0.5 # or slender body
 
-correlation_length = 5 # number of grains with (fully) correlated fluctuations
+correlation_length = 5 # number of grains with (fully) correlated fluctuations (note: not coherence_lengths)
 grain_mass = 1
 grain_radius = 0.1 # grain radius
 
@@ -76,34 +77,55 @@ applied_friction_coeff = (2 - xi*dt)/(2 + xi*dt)
 fluctuation_size = np.sqrt( grain_mass * kb * temp * xi * half_dt ) # takes dt into account. should it be /grain_mass ?
 rescaled_position_step = 2*dt / (2 + xi*dt)
 
-no_fluctuations = False # allows testing for minimum internal energy
+no_fluctuations = False # if True, allows testing for minimum internal energy
 
+# boundary conditions
+# settings
+osmotic_pressure_set = False
+soft_vesicle_set = True # if both set False, 'sharp_return' style is used
+# sizes
+osmotic_pressure_constant = 1000
+soft_vesicle_k = 100
+returning_force_mag = 1000
 
 # # # Aux functions # # #
 
 # # # ELECTROSTATICS # # #
-# next improvement: take repulsions from theory, rather than LJ potentials
-# next improvement: interpolation between homologous and non homologous interaction
+# next improvement?: interpolation between homologous and non homologous interaction
+elstats = Electrostatics()
 
 def interaction_nonhomologous(R_norm, doforce=True):
     '''ASSUMING all non homologous interactions are REPULSIVE ONLY, on the basis that non homologous strands are unlikely to converge'''
-    # LJ params
-    eps = 300/4*kb # 1/4 of interaction strength ~1 kbT
-    sig = grain_radius*2 # particle diameter
     if not doforce: # energy
-        return eps * (sig/R_norm)**12
+        return elstats.calc_a0l0(R_norm*10**-8)
     elif doforce: # force magnitude
-        return -12*eps * sig**12/R_norm**13
+        return -1*elstats.calc_da0dR(R_norm*10**-8)
 
 def interaction_homologous(R_norm, doforce=True):
     '''For grain with matching dnastr index ONLY (for now)'''
-    # LJ params
-    eps = 300/4*kb # 1/4 of interaction strength ~1 kbT
-    sig = grain_radius*2 # particle diameter
     if not doforce: # energy
-        return eps * ( (sig/R_norm)**12 - (sig/R_norm)**6 )
+        return elstats.find_energy('homol 0', R_norm*10**-8)
     elif doforce: # force magnitude
-        return eps * ( -12*(sig**12/R_norm**13) + 6*(sig**6/R_norm**7) )
+        return elstats.force('homol 0', R_norm*10**-8)
+    
+# precomputed interactions for simulation speed
+# parameters
+precompute_grid_resolution = 2500 # per 0.1 lc
+n_Rsteps = int( (R_cut-wall_dist)/0.1 * precompute_grid_resolution )
+R_precompute = np.linspace(wall_dist, R_cut, n_Rsteps)
+
+# build lists
+force_nonhomologous = []
+force_homologous    = []
+eng_nonhomologous   = []
+eng_homologous      = []
+for R_slice in R_precompute:
+    force_nonhomologous += [interaction_nonhomologous(R_slice)]
+    force_homologous    += [interaction_homologous(R_slice)]
+    eng_nonhomologous   += [interaction_nonhomologous(R_slice,doforce=False)]
+    eng_homologous      += [interaction_nonhomologous(R_slice,doforce=False)]
+
+
 
 class Start_position:
     '''
@@ -176,11 +198,6 @@ class Start_position:
         ax.set_zlabel('Z axis')
     
         plt.show()
-
-
-
-# Pairing interaction energy
-##elstats = Electrostatics(homol = homology_set)
 
 
 
@@ -297,10 +314,14 @@ class Strand:
             self.interactions[0].append(R_norm) , self.interactions[1].append(ishomol)
             
             # code safety, rescale R_norm to avoid dangerous conditions
-            R_norm = wall_dist if R_norm < wall_dist else R_norm 
+            #R_norm = wall_dist if R_norm < wall_dist else R_norm # outdated w/ precomputation
+            
+            # find closest R slice, takes into account wall distance
+            close_index = np.argmax(R_norm <= R_precompute)
             
             # linear interaction force
-            f_lin = interaction_homologous(R_norm, doforce=True) if ishomol else interaction_nonhomologous(R_norm, doforce=False)
+            #f_lin = interaction_homologous(R_norm, doforce=True) if ishomol else interaction_nonhomologous(R_norm, doforce=True)
+            f_lin = force_homologous[close_index] if ishomol else force_nonhomologous[close_index]
             
             # apply force
             igrain.update_force(+1*f_lin*R)
@@ -314,9 +335,14 @@ class Strand:
         '''
         energy = 0.0
         for p in range(len(self.interactions[0])):
+            # take saved values
             R_norm = self.interactions[0][p]
             ishomol = self.interactions[1][p]
-            energy += interaction_homologous(R_norm, doforce=False) if ishomol else interaction_nonhomologous(R_norm, doforce=False)
+            # find closest R slice, note: artifact of wall distance
+            close_index = np.argmax(R_norm <= R_precompute)
+            # add to energy
+            #energy += interaction_homologous(R_norm, doforce=False) if ishomol else interaction_nonhomologous(R_norm, doforce=False) # outdated method
+            energy += eng_homologous[close_index] if ishomol else eng_nonhomologous[close_index]
         return energy / (kb*300) # give energy in kbT units
         
     def eng_elastic(self) -> float:
@@ -348,6 +374,7 @@ class Simulation:
         self.total_pairs_traj = []
         self.homol_pairs_traj = []
         self.homol_pair_dist_traj = []
+        self.n_islands_traj = []
         
         #self.record()
 
@@ -442,20 +469,38 @@ class Simulation:
             - soft walls (weak spring)
             - osmotic pressure (constant central force)
         '''
-        returning_force_mag = 10000
-        for strand in self.StrandA,self.StrandB:
-            returning_force = np.array([0., 0., 0.])
-            for i in range(3):
-                for grain in strand.dnastr:
-                    if grain.position[i] + grain.radius > self.boxlims[i]:
-                        returning_force[i] += -1*returning_force_mag
-                        continue # no need to check for any more
-                    if grain.position[i] - grain.radius < -self.boxlims[i]:
-                        returning_force[i] += +1*returning_force_mag
-                        continue
-            if not np.isclose(np.linalg.norm(returning_force), 0):
+        if osmotic_pressure_set: # independent of boxlims
+            # calculate vector from centre of mass towards centre of box (0, 0, 0)
+            for strand in self.StrandA, self.StrandB:
+                tot_gpos = []
+                for g in strand.dnastr:
+                    tot_gpos += [g.position]
+                centre_mass_vec = np.mean(tot_gpos,axis=0)
+                centre_mass_vec /= np.linalg.norm(centre_mass_vec)
+                # apply osmotic pressure to all grains
+                for g in strand.dnastr:
+                    g.update_force( -osmotic_pressure_constant * centre_mass_vec )
+        
+        if soft_vesicle_set: # spherical, returning force to centre, only largest boxlim matters
+            for strand in self.StrandA, self.StrandB:
+                for g in strand.dnastr:
+                    if np.linalg.norm(g.position) > np.max(self.boxlims):
+                        g.update_force( -soft_vesicle_k * g.position )
+        
+        if not osmotic_pressure_set and not soft_vesicle_set: # sharp return style
+            for strand in self.StrandA,self.StrandB:
+                returning_force = np.array([0., 0., 0.])
+                for i in range(3):
                     for grain in strand.dnastr:
-                        grain.update_force(returning_force)
+                        if grain.position[i] + grain.radius > self.boxlims[i]:
+                            returning_force[i] += -1*returning_force_mag
+                            continue # no need to check for any more
+                        if grain.position[i] - grain.radius < -self.boxlims[i]:
+                            returning_force[i] += +1*returning_force_mag
+                            continue
+                if not np.isclose(np.linalg.norm(returning_force), 0):
+                        for grain in strand.dnastr:
+                            grain.update_force(returning_force)
       
     # for data analysis
     def record(self):
@@ -478,20 +523,30 @@ class Simulation:
         self.mean_curvature_traj.append(mean_curvature)
         self.std_curvature_traj.append(std_curvature)
         
-        total_pairs, homol_pairs, homol_pair_dist = self.find_pair_data()
+        total_pairs, homol_pairs, homol_pair_dist, n_islands = self.find_pair_data()
         self.total_pairs_traj.append(total_pairs)
         self.homol_pairs_traj.append(homol_pairs)
         self.homol_pair_dist_traj.append(homol_pair_dist)
+        self.n_islands_traj.append(n_islands)
         
     def find_curvature(self):
         return np.mean( self.StrandA.angle_list + self.StrandB.angle_list ) , np.std( self.StrandA.angle_list + self.StrandB.angle_list )
     
     def find_pair_data(self):
+        # pair numbers
         total_pairs = len(self.StrandA.interactions[0])
         homol_pairs = np.sum(self.StrandA.interactions[1])
+        
+        # find homologous pair distances
         homol_R_norm_list = np.delete(self.StrandA.interactions[0],np.array(self.StrandA.interactions[1])==False)
         homol_pair_dist = np.mean(homol_R_norm_list) if len(homol_R_norm_list)>0 else None
-        return total_pairs, homol_pairs, homol_pair_dist
+       
+        # find number of 'islands'
+        homol_R_norm_list = np.linalg.norm(np.array(self.trajectoryA[-1]) - np.array(self.trajectoryB[-1]), axis=1)
+        homol_R_norm_bool = homol_R_norm_list < R_cut
+        n_islands = len( signal.find_peaks( np.concatenate( ( np.array([False]), homol_R_norm_bool, np.array([False]) ) ) )[0] )
+        
+        return total_pairs, homol_pairs, homol_pair_dist, n_islands
     
     def find_endtoend(self, tindex):
         endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1]) + 0.2
