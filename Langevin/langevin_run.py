@@ -9,6 +9,7 @@ from langevin_model import Grain, Strand, Simulation, Start_position, np, Tuple,
 from langevin_model import kb, temp, kappab, lp, dt, gamma, homology_set, xi
 import pickle
 import sys
+import os
 import logging
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -21,12 +22,12 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
 nsteps = 1000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 10
+coherence_lengths = 50
 curved = False
 nsegs = 5 * coherence_lengths 
 ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 0.3
+sep = 5
 sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
@@ -36,6 +37,10 @@ yshift = 0.0
 
 
 # # # DATA OUTPUT PARAMETERS # # #
+# data output directory
+mydir = './Data_outputs/'
+if not os.path.exists(mydir):
+    os.makedirs(mydir)
 # save data?
 save_data = False
 log_update = 100 # how often to publish values to the log file
@@ -61,7 +66,7 @@ sim = Simulation(StrandA=Strand1, StrandB=Strand2, boxlims=np.array([xlim,ylim,z
 
 for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-log_filename = datetime.now().strftime('./Data_outputs/LOG_%Y%m%d_%H%M%S.log')
+log_filename = datetime.now().strftime(mydir+'LOG_%Y%m%d_%H%M%S.log')
 logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message)s')
 logging.info('Simulation started')
 logging.info(f'''Simulation parameters:
@@ -114,7 +119,7 @@ Simulation Total Energy = {sim.energies[-1]}
     
 # save trajectories
 if save_data:
-    with open('./Data_outputs/test_simulation.dat','wb') as data_f:
+    with open(mydir+'test_simulation.dat','wb') as data_f:
         pickle.dump([sim.trajectoryA, sim.trajectoryB], data_f)
         
 
@@ -139,7 +144,7 @@ plt.plot(xsteps, endtoendA, label = 'Strand A')
 plt.plot(xsteps, endtoendB, label = 'Strand B')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
-plt.savefig('./Data_outputs/endtoend.png')
+plt.savefig(mydir+'endtoend.png')
 plt.show()
 
 # plotting number of pairs
@@ -158,7 +163,7 @@ plt.plot(xsteps, selfpair, label = 'Self')
 plt.plot(xsteps, sim.n_islands, label = 'Islands')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
-plt.savefig('./Data_outputs/pairs.png')
+plt.savefig(mydir+'pairs.png')
 plt.show()
 
 # plotting total internal energy
@@ -186,7 +191,7 @@ plt.ylabel('R, $l_c$')
 plt.plot(xsteps, sim.av_R_islands, label='')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
-plt.savefig('./Data_outputs/island_R.png')
+plt.savefig(mydir+'island_R.png')
 plt.show()
 
 # plotting average island length
@@ -200,7 +205,7 @@ plt.ylabel('L, $l_c$')
 plt.plot(xsteps, sim.av_L_islands, label='')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
-plt.savefig('./Data_outputs/island_length.png')
+plt.savefig(mydir+'island_length.png')
 plt.show()
 
 # plotting average island separation
@@ -214,7 +219,7 @@ plt.ylabel('L, $l_c$')
 plt.plot(xsteps, sim.av_sep_islands, label='')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
-plt.savefig('./Data_outputs/island_separation.png')
+plt.savefig(mydir+'island_separation.png')
 plt.show()
 
     
@@ -273,7 +278,7 @@ if animate:
     ani = FuncAnimation(fig, update, frames=num_frames, interval=50, blit=False)
     
     # Save the animation as an MP4 file (uncomment to save)
-    ani.save('./Data_outputs/3d_line_animation.gif', writer=PillowWriter(fps=20))
+    ani.save(mydir+'3d_line_animation.gif', writer=PillowWriter(fps=20))
     
     logging.info('Animation saved as gif')
     
