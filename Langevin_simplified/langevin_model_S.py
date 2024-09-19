@@ -82,8 +82,8 @@ no_fluctuations = False # if True, allows testing for minimum internal energy
 # boundary conditions
 # settings
 osmotic_pressure_set = False
-soft_vesicle_set = True # if both set False, 'sharp_return' style is used
-# sizes
+soft_vesicle_set = False # if both set False, 'sharp_return' style is used
+# boundary force sizes
 osmotic_pressure_constant = 1000
 soft_vesicle_k = 100
 returning_force_mag = 1000
@@ -97,9 +97,13 @@ elstats = Electrostatics()
 def interaction_nonhomologous(R_norm, doforce=True):
     '''ASSUMING all non homologous interactions are REPULSIVE ONLY, on the basis that non homologous strands are unlikely to converge'''
     if not doforce: # energy
-        return elstats.calc_a0l0(R_norm*10**-8)
+        #return elstats.calc_a0l0(R_norm*10**-8)
+        return 0.0
     elif doforce: # force magnitude
-        return -1*elstats.calc_da0dR(R_norm*10**-8)
+        if R_norm <= 0.2:
+            return -1*elstats.calc_da0dR(R_norm*10**-8)
+        else:
+            return 0.0
 
 def interaction_homologous(R_norm, doforce=True):
     '''For grain with matching dnastr index ONLY (for now)'''
@@ -123,7 +127,7 @@ for R_slice in R_precompute:
     force_nonhomologous += [interaction_nonhomologous(R_slice)]
     force_homologous    += [interaction_homologous(R_slice)]
     eng_nonhomologous   += [interaction_nonhomologous(R_slice,doforce=False)]
-    eng_homologous      += [interaction_nonhomologous(R_slice,doforce=False)]
+    eng_homologous      += [interaction_homologous(R_slice,doforce=False)]
 
 
 
@@ -379,7 +383,7 @@ class Simulation:
         #self.record()
 
     # for time integration / evolution
-    def run_step(self):
+    def run_step(self, fluctuation_factor=1.0):
         '''
         Langevin Modified Velocity-Verlet Algorithm
         Taken from Models for polymeric and anisotropic liquids, M. Kröger, 2005
@@ -388,7 +392,7 @@ class Simulation:
         self.calc_external_force()
         
         # take random fluctuation length for each 'correlation length'
-        fluctuation_list = self.langevin_fluctuations()
+        fluctuation_list = self.langevin_fluctuations(fluctuation_factor)
         
         self.update_velocities_first_halfstep( fluctuation_list )
         
@@ -416,7 +420,7 @@ class Simulation:
         self.StrandA.f_elstat(self.StrandB)
         self.apply_box()
         
-    def langevin_fluctuations(self):
+    def langevin_fluctuations(self, fluctuation_factor):
         '''
         Build list of fluctuations for each grain. Correlated within each 'correlation length'.
         Correlation length usually kuhn length (25) or, less often, helical coherence length (5)
@@ -432,11 +436,11 @@ class Simulation:
         fluctuationA , fluctuationB = [] , []
         
         # build lists, may have different lengths
-        scaling_factor = 1 #e-8
+        adjusted_fluctuation_size = fluctuation_size * fluctuation_factor
         for i in range(int(np.ceil(self.StrandA.num_segments/correlation_length))):
-            fluctuationA += [(np.random.normal(0, fluctuation_size, size=1) *scaling_factor )[0]] * correlation_length
+            fluctuationA += [(np.random.normal(0, adjusted_fluctuation_size, size=1) )[0]] * correlation_length
         for i in range(int(np.ceil(self.StrandB.num_segments/correlation_length))):
-            fluctuationB += [(np.random.normal(0, fluctuation_size, size=1) *scaling_factor )[0]] * correlation_length
+            fluctuationB += [(np.random.normal(0, adjusted_fluctuation_size, size=1) )[0]] * correlation_length
         
         # correct length
         fluctuationA, fluctuationB = fluctuationA[:self.StrandA.num_segments] , fluctuationB[:self.StrandB.num_segments] 
@@ -535,12 +539,13 @@ class Simulation:
     def find_pair_data(self):
         # pair numbers
         total_pairs = len(self.StrandA.interactions[0])
-        homol_pairs = np.sum(self.StrandA.interactions[1])
+        homol_pairs_tot = np.sum(self.StrandA.interactions[1])
         
         # find homologous pair distances
         homol_R_norm_list = np.delete(self.StrandA.interactions[0],np.array(self.StrandA.interactions[1])==False)
         homol_pair_dist = np.mean(homol_R_norm_list) if len(homol_R_norm_list)>0 else None
-       
+        homol_pairs = np.sum( homol_R_norm_list < np.array([0.25]) )
+        
         # find number of 'islands'
         homol_R_norm_list = np.linalg.norm(np.array(self.trajectoryA[-1]) - np.array(self.trajectoryB[-1]), axis=1)
         homol_R_norm_bool = homol_R_norm_list < R_cut
@@ -556,4 +561,5 @@ class Simulation:
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
         return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
+    
     
