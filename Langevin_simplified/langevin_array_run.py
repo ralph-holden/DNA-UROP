@@ -28,7 +28,6 @@ fluctuation_size = np.sqrt( grain_mass * kb * temp * xi * half_dt )
 fluctuation_coeff_list = [0.0,0.25,0.5,0.75,1.0,1.25,1.5,1.75,2.0,2.25,2.5]
 
 # data to save
-ignore_steps = 1000
 n_pairs_master = [[], [], [], [], [], [], [], [], [], [], []]
 
 if len(n_pairs_master)!=n_jobs:
@@ -36,17 +35,14 @@ if len(n_pairs_master)!=n_jobs:
     input('Press return to continue')
 
 for job in range(n_jobs):
-    # data output directory
-    mydir = f'./Data_outputs/fluctuations_effect_sims6/Array_job_{job}/'
-    if not os.path.exists(mydir):
-        os.makedirs(mydir)
+
     
     # adjust job dependant parameter
     fluctuation_factor = fluctuation_coeff_list[job]
     
     # # # SIMULATION PARMAMETERS # # #
     # Run the Monte Carlo algorithm for given number of steps with a progress bar
-    nsteps = 2000
+    nsteps = 50000
     # Length of Segments, where each segment/grain is 1/5 helical coherence length
     coherence_lengths = 20
     curved = False
@@ -63,12 +59,23 @@ for job in range(n_jobs):
     
     
     # # # DATA OUTPUT PARAMETERS # # #
+    # data output directory
+    mydir = f'./Data_outputs/test_fluctuations_effect_sims/Array_job_{job}/'
+    if not os.path.exists(mydir):
+        os.makedirs(mydir)
+    
     # save data?
     save_data = False
     log_update = 100 # how often to publish values to the log file
-    # animation?
+    
+    # terminating settings
+    recall_steps = 3000
+    ignore_steps = 2000 + recall_steps
+    std_tol = 0.01 
+    
+    # animation
     animate = True
-    frame_hop = 100 # frame dump frequency
+    frame_hop = 20 # frame dump frequency
     
     
     
@@ -107,13 +114,6 @@ for job in range(n_jobs):
     for i, item in enumerate(range(nsteps)):
         sim.run_step(fluctuation_factor)
         
-        length = 20
-        progress = (i + 1) / nsteps
-        bar_length = int(length * progress)
-        bar = f"[{'=' * bar_length:{length}}] {progress * 100:.1f}%"
-        sys.stdout.write(f"\r{bar}")
-        sys.stdout.flush()
-        
         # log file & data output
         if i % log_update == 0:
             endtoendA, endtoendB = sim.endtoend_traj[-1][0], sim.endtoend_traj[-1][1]
@@ -131,20 +131,16 @@ for job in range(n_jobs):
     Number Islands           = {sim.n_islands_traj[-1]}
     
     ...''')
-            print(f'''\rSimulation Internal Energy = {sim.energy_traj[-1]}
-    Strand A end to end       = {endtoendA} lc
-    Strand B end to end       = {endtoendB} lc
-    Mean Curvature            = {sim.mean_curvature_traj[-1]*180/np.pi} degrees
-    STD  Curvature            = {sim.std_curvature_traj[-1]*180/np.pi} degrees
-    Total Pairs               = {sim.total_pairs_traj[-1]}
-    Homologous Pairs          = {sim.homol_pairs_traj[-1]}
-    Homologous Pair Distance  = {sim.homol_pair_dist_traj[-1]} lc
-    Number Islands            = {sim.n_islands_traj[-1]}
-    ...''')
             if not endtoendA < 50*coherence_lengths and not endtoendA > 50*coherence_lengths or not endtoendB < 50*coherence_lengths and not endtoendB > 50*coherence_lengths: #always True if 'nan'
                 error_msg = f'STEP {i}: Simulation terminating - lost grains'
                 print(error_msg)
                 logging.info(error_msg)
+                break # end simulation
+                
+            if i>ignore_steps and np.std( sim.homol_pairs_traj[-recall_steps:] )/sim.StrandA.num_segments < std_tol:
+                finish_msg = f'STEP {i}: Simulation terminating - pairs converged'
+                print(finish_msg)
+                logging.info(finish_msg)
                 break # end simulation
         
     # save trajectories
@@ -238,8 +234,10 @@ for job in range(n_jobs):
     plt.title('Homologous Pair Separation')
     plt.xlabel(f'Timestep, {dt}')
     plt.ylabel('Distance, $l_c$')
-    plt.plot(xsteps, sim.homol_pair_dist_traj)
+    plt.plot(xsteps, sim.homol_pair_dist_traj,label='All homologous pairs')
+    plt.plot(xsteps, sim.terminal_dist_traj, label='End homologous pairs')
     plt.grid(linestyle=':')
+    plt.legend(loc='best')
     
     plt.savefig(mydir+'islands.png')
     plt.show()
@@ -314,8 +312,8 @@ for job in range(n_jobs):
 n_pairs_avs = []
 n_pairs_std = []
 for i in n_pairs_master:
-    n_pairs_avs.append(np.mean(i[ignore_steps:])/sim.StrandA.num_segments)
-    n_pairs_std.append(np.std(i[ignore_steps:])/sim.StrandA.num_segments)
+    n_pairs_avs.append(np.mean(i[-recall_steps:])/sim.StrandA.num_segments)
+    n_pairs_std.append(np.std(i[-recall_steps:])/sim.StrandA.num_segments)
     
 plt.figure()
 plt.title('Effect of fluctuation size on homologous pair number')
