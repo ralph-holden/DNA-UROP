@@ -51,7 +51,7 @@ s = 0.4 # standard distance through chain between three grains
 k_bend = kappab/(2*s) # Bending stiffness constant
 
 # Spring constant for bonds
-k_spring = 30000000*kb
+k_spring = 300000000*kb
 
 # Simulation Interaction Parameters
 R_cut = 0.4 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
@@ -60,7 +60,7 @@ wall_dist = 0.2
 ##homology_set = True # False -> NON homologous
 
 # Langevin 
-dt = 0.0001 # timestep, per unit mass 
+dt = 0.000025 # timestep, per unit mass 
 dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
 l_kuhn = lp # persistence length
 slender_body = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
@@ -378,6 +378,7 @@ class Simulation:
         self.total_pairs_traj = []
         self.homol_pairs_traj = []
         self.homol_pair_dist_traj = []
+        self.terminal_dist_traj = []
         self.n_islands_traj = []
         
         #self.record()
@@ -527,10 +528,11 @@ class Simulation:
         self.mean_curvature_traj.append(mean_curvature)
         self.std_curvature_traj.append(std_curvature)
         
-        total_pairs, homol_pairs, homol_pair_dist, n_islands = self.find_pair_data()
+        total_pairs, homol_pairs, homol_pair_dist, terminal_dist, n_islands = self.find_pair_data()
         self.total_pairs_traj.append(total_pairs)
         self.homol_pairs_traj.append(homol_pairs)
         self.homol_pair_dist_traj.append(homol_pair_dist)
+        self.terminal_dist_traj.append(terminal_dist)
         self.n_islands_traj.append(n_islands)
         
     def find_curvature(self):
@@ -551,7 +553,10 @@ class Simulation:
         homol_R_norm_bool = homol_R_norm_list < R_cut
         n_islands = len( signal.find_peaks( np.concatenate( ( np.array([False]), homol_R_norm_bool, np.array([False]) ) ) )[0] )
         
-        return total_pairs, homol_pairs, homol_pair_dist, n_islands
+        # separation of end pairs
+        terminal_dist = np.mean( [abs(self.StrandA.dnastr[0].position - self.StrandB.dnastr[0].position), abs(self.StrandA.dnastr[-1].position - self.StrandB.dnastr[-1].position)] )
+        
+        return total_pairs, homol_pairs, homol_pair_dist, terminal_dist, n_islands
     
     def find_endtoend(self, tindex):
         endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1]) + 0.2
@@ -561,5 +566,3 @@ class Simulation:
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
         return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
-    
-    
