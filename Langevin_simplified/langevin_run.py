@@ -20,31 +20,37 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 5000
+nsteps = 500
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 5
+coherence_lengths = 10
 curved = False
 nsegs = 5 * coherence_lengths 
 ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 12
+sep = 0.22
 #sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # Box Limits
-xlim, ylim, zlim = 4, 4, 4 # from -lim to +lim
+xlim, ylim, zlim = 4, 6, 4 # from -lim to +lim
 # starting shift 
 yshift = 0.0
 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # data output directory
-mydir = './Data_outputs/test_boundaryconditions/'
+mydir = './Data_outputs/test_params/'
 if not os.path.exists(mydir):
     os.makedirs(mydir)
-# save data?
+# save data
 save_data = False
 log_update = 100 # how often to publish values to the log file
-# animation?
+
+# terminating settings
+recall_steps = 2000
+ignore_steps = 2000 + recall_steps
+std_tol = 0.01 
+
+# animation
 animate = True
 frame_hop = 20 # frame dump frequency
 
@@ -83,7 +89,7 @@ Starting conditions:
              ''')
 
 for i, item in enumerate(range(nsteps)):
-    sim.run_step()
+    sim.run_step(fluctuation_factor=0.5)
     
     length = 20
     progress = (i + 1) / nsteps
@@ -123,6 +129,12 @@ Number Islands           = {sim.n_islands_traj[-1]}
             error_msg = f'STEP {i}: Simulation terminating - lost grains'
             print(error_msg)
             logging.info(error_msg)
+            break # end simulation
+            
+        if i>ignore_steps and np.std( sim.homol_pairs_traj[-recall_steps:] )/sim.StrandA.num_segments < std_tol:
+            finish_msg = f'STEP {i}: Simulation terminating - pairs converged'
+            print(finish_msg)
+            logging.info(finish_msg)
             break # end simulation
     
 # save trajectories
@@ -216,8 +228,10 @@ plt.subplot(1, 2, 2)
 plt.title('Homologous Pair Separation')
 plt.xlabel(f'Timestep, {dt}')
 plt.ylabel('Distance, $l_c$')
-plt.plot(xsteps, sim.homol_pair_dist_traj)
+plt.plot(xsteps, sim.homol_pair_dist_traj, label='All homologous pairs')
+plt.plot(xsteps, sim.terminal_dist_traj, label='End homologous pairs')
 plt.grid(linestyle=':')
+plt.legend(loc='best')
 
 plt.savefig(mydir+'islands.png')
 plt.show()
