@@ -20,33 +20,38 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 1000
+nsteps = 10000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 50
+coherence_lengths = 20
 curved = False
 nsegs = 5 * coherence_lengths 
 ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
 # Separation, surface to surface (along x axis)
-sep = 5
-sep += 0.2 # augment for surface to surface
+sep = 0.22
+#sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
-# Box Limits
-xlim, ylim, zlim = 12, 12, 12 # from -lim to +lim
 # starting shift 
 yshift = 0.0
 
 
 # # # DATA OUTPUT PARAMETERS # # #
 # data output directory
-mydir = './Data_outputs/'
+mydir = './Data_outputs/test_update/'
 if not os.path.exists(mydir):
     os.makedirs(mydir)
-# save data?
-save_data = False
+# save data
+save_data = True
 log_update = 100 # how often to publish values to the log file
-# animation?
+
+# terminating settings
+recall_steps = 2000
+ignore_steps = 2000 + recall_steps
+std_tol = 0.01 
+
+# animation
 animate = True
-frame_hop = 10 # frame dump frequency
+frame_hop = 20 # frame dump frequency
+xlim, ylim, zlim = 2, 12, 2 # Box Limits, for viewing, from -lim to +lim
 
 
 
@@ -79,7 +84,7 @@ logging.info(f'''Simulation parameters:
     boxlims  : {xlim}, {ylim}, {zlim}
     homology : {homology_set} 
 Starting conditions:
-    separation: {sep-0.2} (surface to surface)
+    separation: {sep} (interaxial)
     curvature : {curved}
              ''')
 
@@ -95,50 +100,59 @@ for i, item in enumerate(range(nsteps)):
     
     # log file & data output
     if i % log_update == 0:
-        endtoendA, endtoendB = sim.endtoends[-1][0], sim.endtoends[-1][1]
+        endtoendA, endtoendB = sim.endtoend_traj[-1][0], sim.endtoend_traj[-1][1]
         logging.info(f'''Step {i} : DATA:
+Simulation Internal Energy = {sim.energy_traj[-1]}
+
 Strand A end to end = {endtoendA} lc
 Strand B end to end = {endtoendB} lc
-Total Pairs = {sim.pair_counts[-1][0]}
-Number of Islands = {sim.n_islands[-1]}
-Simulation Internal Energy = {sim.energies[-1]}
-Island Pair Distance = {sim.av_R_islands[-1]}
-Average Island Length = {sim.av_L_islands[-1]}
-Average Island Separation = {sim.av_sep_islands[-1]}
+Mean Curvature      = {sim.mean_curvature_traj[-1]*180/np.pi} degrees
+STD  Curvature      = {sim.std_curvature_traj[-1]*180/np.pi} degrees
+Number Loops        = {sim.n_loops_traj[-1]}
+
+Total Pairs              = {sim.total_pairs_traj[-1]}
+Homologous Pairs         = {sim.homol_pairs_traj[-1]}
+Homologous Pair Distance = {sim.homol_pair_dist_traj[-1]} lc
+Number Islands           = {sim.n_islands_traj[-1]}
+
 ...''')
-        print(f'''\rStrand A end to end = {endtoendA} lc
-Strand B end to end = {endtoendB} lc
-Total Pairs = {sim.pair_counts[-1][0]}
-Simulation Total Energy = {sim.energies[-1]} 
+        print(f'''\rSimulation Internal Energy = {sim.energy_traj[-1]}
+Strand A end to end        = {endtoendA} lc
+Strand B end to end        = {endtoendB} lc
+Mean Curvature             = {sim.mean_curvature_traj[-1]*180/np.pi} degrees
+STD  Curvature             = {sim.std_curvature_traj[-1]*180/np.pi} degrees
+Number Loops               = {sim.n_loops_traj[-1]}
+Total Pairs                = {sim.total_pairs_traj[-1]}
+Homologous Pairs           = {sim.homol_pairs_traj[-1]}
+Homologous Pair Distance   = {sim.homol_pair_dist_traj[-1]} lc
+Number Islands             = {sim.n_islands_traj[-1]}
 ...''')
         if not endtoendA < 50*coherence_lengths and not endtoendA > 50*coherence_lengths or not endtoendB < 50*coherence_lengths and not endtoendB > 50*coherence_lengths: #always True if 'nan'
-            error_msg = 'Simulation terminating - lost grains'
+            error_msg = f'STEP {i}: Simulation terminating - lost grains'
             print(error_msg)
             logging.info(error_msg)
             break # end simulation
-    
-# save trajectories
-if save_data:
-    with open(mydir+'test_simulation.dat','wb') as data_f:
-        pickle.dump([sim.trajectoryA, sim.trajectoryB], data_f)
+            
+        if i>ignore_steps and np.std( sim.homol_pairs_traj[-recall_steps:] )/sim.StrandA.num_segments < std_tol:
+            finish_msg = f'STEP {i}: Simulation terminating - pairs converged'
+            print(finish_msg)
+            logging.info(finish_msg)
+            break # end simulation
         
-
 # extracting data from trajectories
 xsteps = np.linspace(0,len(sim.trajectoryA),len(sim.trajectoryA))
-endtoendA, endtoendB = np.array(sim.endtoends)[:,0], np.array(sim.endtoends)[:,1]
+endtoendA, endtoendB = np.array(sim.endtoend_traj)[:,0], np.array(sim.endtoend_traj)[:,1]
 endtoendA, endtoendB = list(endtoendA), list(endtoendB)
-totpair, selfpair = np.array(sim.pair_counts)[:,0], np.array(sim.pair_counts)[:,1]
-totpair, selfpair = list(totpair), list(selfpair)
 
 # plotting end to end distances
-endtoendendA, endtoendendB = sim.endtoend(-1)
+endtoendendA, endtoendendB = sim.find_endtoend(-1)
 print()
 print(f'End to end distance Strand A = {endtoendendA}')
 print(f'End to end distance Strand B = {endtoendendB}')
 
 plt.figure()
 plt.title('Coarse Grain DNA End to End Distance')
-plt.xlabel('Timestep')
+plt.xlabel(f'Timestep, {dt}')
 plt.ylabel('End to End distance, $l_c$')
 plt.plot(xsteps, endtoendA, label = 'Strand A')
 plt.plot(xsteps, endtoendB, label = 'Strand B')
@@ -147,79 +161,103 @@ plt.legend(loc='best')
 plt.savefig(mydir+'endtoend.png')
 plt.show()
 
-# plotting number of pairs
-totpair_end, selfpair_end = sim.pair_counts[-1][0], sim.pair_counts[-1][1]
-print()
-print(f'Total number of paired grains = {totpair_end}')
-print(f'Number of paired grains to self = {selfpair_end}')
-print(f'Number of Islands = {sim.n_islands[-1]}')
-
-plt.figure()
-plt.title('Coarse Grain DNA Pairs')
-plt.xlabel('Timestep')
-plt.ylabel('Paired DNA Grains, $0.2 l_c$')
-plt.plot(xsteps, totpair, label = 'Total')
-plt.plot(xsteps, selfpair, label = 'Self')
-plt.plot(xsteps, sim.n_islands, label = 'Islands')
-plt.grid(linestyle=':')
-plt.legend(loc='best')
-plt.savefig(mydir+'pairs.png')
-plt.show()
-
 # plotting total internal energy
 print()
-print(f'Internal Energy = {sim.energies[-1]} kbT')
+print(f'Internal Energy = {sim.energy_traj[-1]} kbT')
 
 plt.figure()
 plt.title('Coarse Grain DNA Internal Energy')
-plt.xlabel('Timestep')
+plt.xlabel(f'Timestep, {dt}')
 plt.ylabel('Energy, $k_bT$')
-plt.plot(xsteps, sim.energies, label='')
+plt.plot(xsteps, sim.energy_traj)
 plt.grid(linestyle=':')
-plt.legend(loc='best')
-plt.savefig('./Data_outputs/energy.png')
+plt.savefig(mydir+'energy.png')
 plt.show()
 
-# plotting average island pair distance
+# plotting curvature
 print()
-print(f'Average Island Pair Distance = {sim.av_R_islands[-1]}')
+print(f'Mean Curvature = {sim.mean_curvature_traj[-1]*180/np.pi} degrees')
+print(f'STD  Curvature = {sim.std_curvature_traj[-1]*180/np.pi} degrees')
 
 plt.figure()
-plt.title('Average Island Pair Distance')
-plt.xlabel('Timestep')
-plt.ylabel('R, $l_c$')
-plt.plot(xsteps, sim.av_R_islands, label='')
+plt.title('Mean Curvature')
+plt.xlabel(f'Timestep, {dt}')
+plt.ylabel('Curvature, degrees')
+plt.plot(xsteps, abs(np.array(sim.mean_curvature_traj)*180/np.pi) + np.array(sim.std_curvature_traj)*180/np.pi, label='+std', color='orange')
+plt.plot(xsteps, abs(np.array(sim.mean_curvature_traj)*180/np.pi), label='mean')
+plt.plot(xsteps, abs(np.array(sim.mean_curvature_traj)*180/np.pi) - np.array(sim.std_curvature_traj)*180/np.pi, label='-std', color='orange')
 plt.grid(linestyle=':')
 plt.legend(loc='best')
-plt.savefig(mydir+'island_R.png')
+plt.savefig(mydir+'curvature.png')
 plt.show()
 
-# plotting average island length
+# plotting pair data
 print()
-print(f'Average Island Length = {sim.av_L_islands[-1]}')
+print(f'Total Pairs = {sim.total_pairs_traj[-1]}') # may want to remove
+print(f'Homologous Pairs = {sim.homol_pairs_traj[-1]}')
+print(f'Homologous Pair Distance = {sim.homol_pair_dist_traj[-1]} lc')
+print(f'Number islands = {sim.n_islands_traj[-1]}')
 
-plt.figure()
+plt.figure(figsize=[16,5])
+
+plt.subplot(1, 2, 1)
+plt.title('Pair Number')
+plt.xlabel(f'Timestep, {dt}')
+plt.ylabel('Number of Pairs')
+plt.plot(xsteps, sim.total_pairs_traj, label='Total Pairs')
+plt.plot(xsteps, sim.homol_pairs_traj, label='Homologous Pairs')
+plt.plot(xsteps, sim.n_loops_traj,     label='Loops')
+plt.grid(linestyle=':')
+plt.legend(loc='best')
+
+plt.subplot(1, 2, 2)
+plt.title('Homologous Pair Separation')
+plt.xlabel(f'Timestep, {dt}')
+plt.ylabel('Distance, $l_c$')
+plt.plot(xsteps, sim.homol_pair_dist_traj, label='All homologous pairs')
+plt.plot(xsteps, sim.terminal_dist_traj, label='End homologous pairs')
+plt.grid(linestyle=':')
+plt.legend(loc='best')
+
+plt.savefig(mydir+'pair_data.png')
+plt.show()
+
+# plotting average island length & separation
+print()
+print(f'Average Island Length = {sim.L_islands_traj[-1]}')
+print(f'Average Island Separation = {sim.sep_islands_traj[-1]}')
+
+plt.figure(figsize=[16,10])
+
+plt.subplot(2, 2, 1)
 plt.title('Average Island Length')
-plt.xlabel('Timestep')
+plt.xlabel(f'Timestep, {dt}')
 plt.ylabel('L, $l_c$')
-plt.plot(xsteps, sim.av_L_islands, label='')
+plt.plot(xsteps, sim.L_islands_traj)
 plt.grid(linestyle=':')
-plt.legend(loc='best')
-plt.savefig(mydir+'island_length.png')
-plt.show()
 
-# plotting average island separation
-print()
-print(f'Average Island Separation = {sim.av_sep_islands[-1]}')
-
-plt.figure()
+plt.subplot(2, 2, 2)
 plt.title('Average Island Separation')
-plt.xlabel('Timestep')
+plt.xlabel(f'Timestep, {dt}')
 plt.ylabel('L, $l_c$')
-plt.plot(xsteps, sim.av_sep_islands, label='')
+plt.plot(xsteps, sim.sep_islands_traj)
 plt.grid(linestyle=':')
-plt.legend(loc='best')
-plt.savefig(mydir+'island_separation.png')
+
+plt.subplot(2, 2, 3)
+plt.title('Average Island Number')
+plt.xlabel(f'Timestep, {dt}')
+plt.ylabel('Number of Islands')
+plt.plot(xsteps, sim.n_islands_traj)
+plt.grid(linestyle=':')
+
+plt.subplot(2, 2, 4)
+plt.title('Average Island Distance')
+plt.xlabel(f'Timestep, {dt}')
+plt.ylabel('Interaxial Separation, $l_c$')
+plt.plot(xsteps, sim.R_islands_traj)
+plt.grid(linestyle=':')
+
+plt.savefig(mydir+'island_data.png')
 plt.show()
 
     
@@ -285,4 +323,9 @@ if animate:
     # Show the plot
     plt.show()
     
+# save trajectories
+if save_data:
+    with open(mydir+'test_simulation.dat','wb') as data_f:
+        pickle.dump([sim.trajectoryA, sim.trajectoryB], data_f)
+
 logging.info('Simulation completed')
