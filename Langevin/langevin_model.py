@@ -5,28 +5,29 @@ Created on Thu Jul 18 18:11:06 2024
 @author: Ralph Holden
 
 MODEL:
-    polymer bead model - Worm-like-Chain, including excluded volume and specialised dsDNA interactions
-    beads correspond to 1/5 correlation length as described in Kornyshev-Leiken theory
-        as such, for non homologous DNA, only one consecutive helical coherence length can have attractive charged double helix interactions
+    polymer bead-chain model, WLC including excluded volume and specialised dsDNA interactions
+    beads correspond to 1/25 a persistence length, or 1/5 correlation length as described in Kornyshev-Leiken theory
+        for non-homologous DNA, only one consecutive helical coherence length can have attractive charged double helix interactions
    NOTE: edge effects not accounted for
     
 CODE & SIMULATION:
-    Langevin dynamics (a Monte Carlo method) used to propagate each grain in the dsDNA strands
+    Langevin dynamics used to propagate each grain in the dsDNA strands
     Additional forces involved are; 
         harmonic grain springs for keeping the strand intact (artifical 'fix')
-        harmonic angular springs for the worm like chain
+        harmonic angular springs for the Worm-Like Chain
         conditional electrostatic interactions as described in Kornyshev-Leikin theory
         + keeping inside the simulation box (confined DNA, closed simulation, artificicial 'fix' to avoid lost particles)
     Energy dependant on:
         worm like chain bending (small angle approx -> angular harmonic)
         conditional electrostatic interactions as described in Kornyshev-Leikin theory
 """
-# imports
+# # # Imports # # #
 from itertools import combinations
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple
 from scipy import special
+from scipy import signal
 from scipy.constants import epsilon_0, Boltzmann
 
 import sys
@@ -50,22 +51,25 @@ s = 0.4 # standard distance through chain between three grains
 k_bend = kappab/(2*s) # Bending stiffness constant
 
 # Spring constant for bonds
-k_spring = 30000000*kb
+k_spring = 300000000*kb
 
 # Simulation Interaction Parameters
-R_cut = 0.6 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
-self_interaction_limit = 5 # avoid interactions between grains in same strand
+R_cut = 0.4 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
+self_interaction_limit = 6 # avoid interactions between grains in same strand
+wall_dist = 0.2
 homology_set = True # False -> NON homologous
+pair_count_upper_dist = 0.25
 
 # Langevin 
-dt = 0.0001 # timestep, per unit mass 
+dt = 0.000025 # timestep, per unit mass 
 dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
 l_kuhn = lp # persistence length
 slender_body = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
 gamma = 0.5 # or slender body
 
-correlation_length = 5 # number of grains with (fully) correlated fluctuations
+correlation_length = 5 # number of grains with (fully) correlated fluctuations (note: not coherence_lengths)
 grain_mass = 1
+grain_radius = 0.1 # grain radius
 
 # define parameters for Langevin modified Velocity-Verlet algorithm - M. Kroger
 xi = 2/dt * gamma # used instead of gamma for Langevin modified Velocity-Verlet
@@ -74,10 +78,26 @@ applied_friction_coeff = (2 - xi*dt)/(2 + xi*dt)
 fluctuation_size = np.sqrt( grain_mass * kb * temp * xi * half_dt ) # takes dt into account. should it be /grain_mass ?
 rescaled_position_step = 2*dt / (2 + xi*dt)
 
-no_fluctuations = False # allows testing for minimum internal energy
+no_fluctuations = False # if True, allows testing for minimum internal energy
+
+# boundary conditions
+# settings
+osmotic_pressure_set = False
+soft_vesicle_set = False # if both set False, 'sharp_return' style is used
+# boundary force sizes
+osmotic_pressure_constant = 1000
+soft_vesicle_k = 100
+returning_force_mag = 1000
+# Container limits, for soft_vesicle and sharp_return settings
+container_size = 15
 
 
 # # # Aux functions # # #
+
+# # # ELECTROSTATICS # # #
+elstats = Electrostatics(homology_set)
+
+# Initial configuration
 class Start_position:
     '''
     Initialises the starting positions of a DNA strand
@@ -152,11 +172,6 @@ class Start_position:
 
 
 
-# Pairing interaction energy
-elstats = Electrostatics(homol = homology_set)
-
-
-
 class Grain():
     def __init__(self, position: np.array, velocity: np.array, radius = 0.1):
         self.position = np.array(position, dtype=np.float64)
@@ -184,6 +199,7 @@ class Strand:
         self.num_segments = len(grains)
         self.isinteract = np.zeros(self.num_segments)==np.ones(self.num_segments)
         self.interactions = []
+        self.angle_list = []
         
         # Gives list indexes that can break the self interaction lower limit, by interacting ACROSS the strands
         self.cross_list = [] # defined here as to avoid repetitions. 
@@ -206,7 +222,6 @@ class Strand:
             force = force_magnitude * force_direction
             self.dnastr[i].update_force(force)
             self.dnastr[i+1].update_force(-force)
-            #print(f'bond force: {force}')
             
     def apply_distance_constraints(self):
         for i in range(self.num_segments-1):
@@ -277,6 +292,10 @@ class Strand:
                 self.dnastr[i].update_force(np.array([ xforces[i-1], yforces[i-1], zforces[i-1]]))
         
     def f_wlc(self):
+        
+        # reset angle_list attribute
+        self.angle_list = []
+        
         for i in range(1, self.num_segments - 1):
             # Vectors between adjacent grains
             r1 = self.dnastr[i-1].position - self.dnastr[i].position
@@ -286,15 +305,18 @@ class Strand:
             # Cosine of the angle between r1 and r2
             cos_theta = np.dot(r1, r2) / (r1_norm * r2_norm)
             theta = np.arccos(np.clip(cos_theta, -1.0, 1.0))
+            
+            # save angles for calculating elastic energy
+            self.angle_list.append( theta - np.pi )
+            
             if np.isclose(theta,np.pi):
                 continue # angle equivalent to 0 therefore no torque required
-            torque_magnitude = -k_bend * (theta - np.pi) 
-            torque_direction = r1+r2
-            torque_direction /= np.linalg.norm(torque_direction) if np.linalg.norm(torque_direction) != 0 else 1
-            torque = torque_magnitude * torque_direction
-            #self.dnastr[i-1].update_force(-torque)
-            self.dnastr[i].update_force(torque)
-            #self.dnastr[i+1].update_force(-torque)
+                
+            force_magnitude = -k_bend * (theta - np.pi) 
+            force_direction = r1+r2
+            force_direction /= np.linalg.norm(force_direction) if np.linalg.norm(force_direction) != 0 else 1
+            force = force_magnitude * force_direction
+            self.dnastr[i].update_force(force)
         
     def find_angle(self, seg_index):
         p1 = self.dnastr[seg_index-1].position
@@ -324,7 +346,7 @@ class Strand:
             igrain = self.dnastr[i] if i<self.num_segments else other.dnastr[i-self.num_segments] 
             jgrain = self.dnastr[j] if j<self.num_segments else other.dnastr[j-self.num_segments] # use correct strand
             R = jgrain.position - igrain.position
-            R_norm = np.linalg.norm(R) - 0.2 # get surface - surface distance
+            R_norm = np.linalg.norm(R) # get interaxial distance
             
             # if interaction under cutoff distance
             if R_norm < R_cut and R_norm != 0: 
@@ -349,7 +371,6 @@ class Strand:
                         self.interactions.append( [[],[]] ) # create new island
                         self.interactions[-1]    [0].append(idnti+' '+idntj)
                         self.interactions[-1]    [1].append(R_norm)
-                #self.update_repetitions(other, island, idnti, idntj, R_norm)
                 
     def find_island(self, idnti, idntj):
         # check if add to any existing 'islands'
@@ -435,7 +456,7 @@ class Strand:
 
         for isle in self.interactions:
             for i in range(len(isle[0])):
-                dist_walled = isle[1][i]*10**-8 if isle[1][i] >= 0.2 else 0.2e-8 # wall the repulsive potential
+                dist_walled = isle[1][i]*10**-8 if isle[1][i] >= wall_dist else 0.2e-8 # wall the repulsive potential
                 felstat = elstats.force(isle[2][i], dist_walled) # change to metres
                 # identify relevant grains
                 idnt1 = isle[0][i].split(' ')[0]
@@ -477,7 +498,7 @@ class Strand:
                         other.dnastr[gi_B].update_force(direction_vec_B*frec_magnitude)
         
     # for energies, not including bond springs or translational energy
-    def eng_elstat(self, other, homol=False):
+    def eng_elstat(self, other):
         '''
         Does electrostatic energy of BOTH strands
         In each step, use after f_elstat() so gen functions do not have to be repeated, homol argument in f_elstat() defines homologicity
@@ -488,12 +509,13 @@ class Strand:
             #    continue
             for n in range(len( isle[1] )):
                 g_R = isle[1][n]
+                dist_walled = g_R*10**-8 if g_R >= wall_dist else 0.2e-8 # wall the repulsive potential
                 g_L = isle[2][n]
                 ishomol = type(g_L) == str
                 if not ishomol:
-                    energy +=  elstats.find_energy(g_L, g_R*10**-8) - elstats.find_energy(g_L-1, g_R*10**-8) # remove 'built-up' energy over L w/ different R
+                    energy += elstats.find_energy(g_L, dist_walled) - elstats.find_energy(g_L-1, g_R*10**-8) # remove 'built-up' energy over L w/ different R
                 elif ishomol:
-                    energy += elstats.find_energy(g_L, g_R*10**-8) # energy is per unit length
+                    energy += elstats.find_energy(g_L, dist_walled) # energy is per unit length
         return energy / (kb*300) # give energy in kbT units
         
     def eng_elastic(self) -> float:
@@ -502,8 +524,7 @@ class Strand:
         Uses small angle approx so finer coarse graining more accurate
         '''
         energy = 0
-        for seg_index in range(1,self.num_segments-1):
-            angle = self.find_angle(seg_index)
+        for angle in self.angle_list:
             energy += 1/2 * k_bend *  angle**2
         return energy / (kb*300) # give energy in kbT units
     
@@ -526,28 +547,40 @@ class Simulation:
         # data
         self.trajectoryA = []
         self.trajectoryB = []
-        self.pair_counts = []
-        self.energies = []
-        self.endtoends = []
-        self.centremass = []
-        self.n_islands = []
-        self.av_R_islands = []
-        self.av_L_islands = [] 
-        self.av_sep_islands = []
+        
+        self.energy_traj = []
+        
+        self.endtoend_traj = []
+        self.mean_curvature_traj = []
+        self.std_curvature_traj = []
+        
+        self.homol_pairs_traj = []
+        self.homol_pair_dist_traj = []
+        self.terminal_dist_traj = []
+        self.n_loops_traj = []
+        
+        self.total_pairs_traj = []
+        self.R_islands_traj = []
+        self.n_islands_traj = []
+        self.L_islands_traj = [] 
+        self.sep_islands_traj = []
+        
         self.interactions_traj = []
+        
+        self.MSD_cm_traj = []
         #self.record()
 
     # for time integration / evolution
-    def run_step(self):
+    def run_step(self, fluctuation_factor=1.0):
         '''
         Langevin Modified Velocity-Verlet Algorithm
         Taken from Models for polymeric and anisotropic liquids, M. Kröger, 2005
         '''
         # reset and calculate external forces, information stored in Grain attribute
-        self.calc_external_force()
+        #self.calc_external_force()
         
         # take random fluctuation length for each 'correlation length'
-        fluctuation_list = self.langevin_fluctuations()
+        fluctuation_list = self.langevin_fluctuations(fluctuation_factor)
         
         self.update_velocities_first_halfstep( fluctuation_list )
         
@@ -576,28 +609,34 @@ class Simulation:
         self.StrandA.f_homology_recognition(self.StrandB)
         self.apply_box()
         
-    def langevin_fluctuations(self, correlated=True):
+    def langevin_fluctuations(self, fluctuation_factor):
         '''
-        Build list of fluctuations for each grain. Correlated within each Kuhn length.
+        Build list of fluctuations for each grain. Correlated within each 'correlation length'.
+        Correlation length usually kuhn length (25) or, less often, helical coherence length (5)
         
-        correlated = True (default)
         Applies UNcorrellated brownian force to each 'correlation length'
         Fully correllated within fluctuation 'correlation length'
-        
-        correlated = False
-        Random, uncorrelated force applied to each individual particle, 1/5 coherence length
         '''
-        fluctuation_list = []
-        for strand in [self.StrandA,self.StrandB]:
-            for n in range(correlation_length, strand.num_segments+1, correlation_length):
-                for grains in [strand.dnastr[n-correlation_length:n]]:
-                    # Random thermal force, applied across correlation_length
-                    random_force = np.random.normal(0, fluctuation_size, size=3) 
-                    if no_fluctuations:
-                        random_force = np.zeros(3) # for zeroing fluctuations
-                    # Add to fluctuation_list, for use in 1st & 2nd velocity steps
-                    for g in grains:
-                        fluctuation_list.append(random_force)
+        # if no fluctuations specified (for bug testing), return array of zeroes
+        if no_fluctuations:
+            return np.zeros(self.StrandA.num_segments+self.StrandB.num_segments)
+        
+        # reset lists
+        fluctuationA , fluctuationB = [] , []
+        
+        # build lists, may have different lengths
+        adjusted_fluctuation_size = fluctuation_size * fluctuation_factor
+        for i in range(int(np.ceil(self.StrandA.num_segments/correlation_length))):
+            fluctuationA += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * correlation_length
+        for i in range(int(np.ceil(self.StrandB.num_segments/correlation_length))):
+            fluctuationB += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * correlation_length
+        
+        # correct length
+        fluctuationA, fluctuationB = fluctuationA[:self.StrandA.num_segments] , fluctuationB[:self.StrandB.num_segments] 
+        
+        # put together, for form taken by functions
+        fluctuation_list = fluctuationA + fluctuationB
+        
         return fluctuation_list
         
     def update_velocities_first_halfstep(self, fluctuation_list):
@@ -614,33 +653,44 @@ class Simulation:
             grain.velocity *= applied_friction_coeff # apply friction
             grain.velocity += half_dt * grain.ext_force / grain_mass # apply external force
             grain.velocity += fluctuation_list[i] # apply fluctuation 
-            
+                        
     def apply_box(self):
         '''
         Constant force be applied to entire strand when one part strays beyond box limits
-        
-        Update required: different boundary conditions
-            - soft walls (weak spring)
-            - osmotic pressure (constant central force)
         '''
-        returning_force_mag = 10000
-        for strand in self.StrandA,self.StrandB:
-            returning_force = np.array([0., 0., 0.])
-            for i in range(3):
-                for grain in strand.dnastr:
-                    if grain.position[i] + grain.radius > self.boxlims[i]:
-                        returning_force[i] += -1*returning_force_mag
-                        continue # no need to check for any more
-                    if grain.position[i] - grain.radius < -self.boxlims[i]:
-                        returning_force[i] += +1*returning_force_mag
-                        continue
-            if not np.isclose(np.linalg.norm(returning_force), 0):
-                    for grain in strand.dnastr:
-                        grain.update_force(returning_force)
+        if osmotic_pressure_set: # independent of container_size
+            # calculate vector from centre of mass towards centre of box (0, 0, 0)
+            for strand in self.StrandA, self.StrandB:
+                tot_gpos = []
+                for g in strand.dnastr:
+                    tot_gpos += [g.position]
+                centre_mass_vec = np.mean(tot_gpos,axis=0)
+                centre_mass_vec /= np.linalg.norm(centre_mass_vec)
+                # apply osmotic pressure to all grains
+                for g in strand.dnastr:
+                    g.update_force( -osmotic_pressure_constant * centre_mass_vec )
+        
+        if soft_vesicle_set: # spherical, returning force to centre, only largest boxlim matters
+            for strand in self.StrandA, self.StrandB:
+                for g in strand.dnastr:
+                    if np.linalg.norm(g.position) > container_size:
+                        g.update_force( -soft_vesicle_k * (np.linalg.norm(g.position) - container_size) * g.position/np.linalg.norm(g.position) )
+        
+        if not osmotic_pressure_set and not soft_vesicle_set: # sharp return style
+            for strand in self.StrandA,self.StrandB:
+                
+                centremass_position = np.zeros(3)
+                for g in strand.dnastr:
+                    centremass_position += g.position
+                centremass_position /= strand.num_segments
+                
+                if np.linalg.norm(centremass_position) > container_size:
+                    for g in strand.dnastr:
+                        g.update_force( -returning_force_mag * centremass_position/np.linalg.norm(centremass_position) )
       
     # for data analysis
     def record(self):
-        
+
         new_trajA = []
         for grain in self.StrandA.dnastr:
             new_trajA.append(np.array([grain.position[0], grain.position[1], grain.position[2]]))
@@ -651,28 +701,46 @@ class Simulation:
             new_trajB.append(np.array([grain.position[0], grain.position[1], grain.position[2]]))
         self.trajectoryB.append(new_trajB)
         
-        self.energies.append(self.find_energy())
+        self.energy_traj.append(self.find_energy())
         
-        self.endtoends.append(self.endtoend(-1))
+        self.endtoend_traj.append(self.find_endtoend(-1))
         
-        #self.centremass.append([self.StrandA.find_centremass(),self.StrandB.find_centremass()])
+        mean_curvature, std_curvature = self.find_curvature()
+        self.mean_curvature_traj.append(mean_curvature)
+        self.std_curvature_traj.append(std_curvature)
         
-        totpair, selfpair, n_islands, av_R_islands, av_L_islands, av_sep_islands = self.islands_data()
-        self.pair_counts.append([totpair, selfpair])
-        self.n_islands.append(n_islands)
-        self.av_R_islands.append(av_R_islands)
-        self.av_L_islands.append(av_L_islands)
-        self.av_sep_islands.append(av_sep_islands)
+        '''
+        self.MSD_cm_traj = []
+        '''
+        
+        total_pairs, R_islands, n_islands, L_islands, sep_islands = self.find_island_data()
+        self.total_pairs_traj.append(total_pairs)
+        self.R_islands_traj.append(R_islands)
+        self.n_islands_traj.append(n_islands)
+        self.L_islands_traj.append(L_islands)
+        self.sep_islands_traj.append(sep_islands)
+        
+        homol_pairs, homol_pair_dist, terminal_dist, n_loops = self.find_pair_data()
+        self.homol_pairs_traj.append(homol_pairs)
+        self.homol_pair_dist_traj.append(homol_pair_dist)
+        self.terminal_dist_traj.append(terminal_dist)
+        self.n_loops_traj.append(n_loops)
         
         if self.StrandA.interactions != [[[], [], []]]:
             self.interactions_traj.append(self.StrandA.interactions)
     
-    def endtoend(self, tindex):
+    def find_endtoend(self, tindex):
         endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1]) + 0.2
         endtoendB = np.linalg.norm(self.trajectoryB[tindex][0] - self.trajectoryB[tindex][-1]) + 0.2 # account for size of particle
         return endtoendA, endtoendB
     
-    def islands_data(self):
+    def find_curvature(self):
+        return np.mean( self.StrandA.angle_list + self.StrandB.angle_list ) , np.std( self.StrandA.angle_list + self.StrandB.angle_list )
+    
+    def find_MSD(self):
+        pass
+    
+    def find_island_data(self):
         '''
         Finds ALL data concerning interacting 'islands'
         
@@ -694,20 +762,17 @@ class Simulation:
                   0, 0, 0, None, 0, None
         '''
         if self.StrandA.interactions == [[[], [], []]]:
-            return 0, 0, 0, None, 0, None
+            return 0, None, 0, None, None
         
         n_islands = len(self.StrandA.interactions) # number of loops / islands
         
-        count_total = 0
-        count_pairs = 0
+        total_pairs = 0
         av_R_islands = 0
         start_end_g = [],[]
         
         for isle in self.StrandA.interactions:
             
-            count_total += len(isle[0])
-            for i in range(len(isle[0])):
-                count_pairs += 1 if isle[0][i][0]==isle[0][i][4] else 0
+            total_pairs += np.sum( np.array(isle[1]) < np.array([pair_count_upper_dist]) )
             
             av_R_islands += np.mean( isle[1] )
             
@@ -719,11 +784,29 @@ class Simulation:
         
         L_islands    = np.diff( start_end_g ) [:,  ::2] + 1
         sep_islands  = np.diff( start_end_g ) [:, 1::2] - 1 if len( np.diff( start_end_g ) [:, 1::2] ) != 0 else None
-        av_L_islands   = np.mean( L_islands   ) * 0.2
-        av_sep_islands = np.mean( sep_islands ) * 0.2 if sep_islands.any() != None else None # convert to units of coherence lengths
+        av_L_islands   = np.mean( L_islands   ) * 2*grain_radius
+        av_sep_islands = np.mean( sep_islands ) * 2*grain_radius if sep_islands.any() != None else None # convert to units of coherence lengths
         
-        return count_total, count_pairs, n_islands, av_R_islands, av_L_islands, av_sep_islands
-          
+        return total_pairs, av_R_islands, n_islands, av_L_islands, av_sep_islands
+    
+    def find_pair_data(self):
+        # find homologous pair count
+        homol_R_norm_list = np.linalg.norm(np.array(self.trajectoryA[-1]) - np.array(self.trajectoryB[-1]), axis=1)
+        homol_pairs = np.sum( homol_R_norm_list < np.array([pair_count_upper_dist]) ) # <0.25 are 'caught' in recognition well
+        
+        # separation of pairs
+        homol_pair_dist = np.mean( homol_R_norm_list )
+        terminal_dist = np.mean( [np.linalg.norm(self.StrandA.dnastr[0].position - self.StrandB.dnastr[0].position), np.linalg.norm(self.StrandA.dnastr[-1].position - self.StrandB.dnastr[-1].position)] )
+        
+        # number of 'loops'
+        R_norm_list = []
+        for i in range(len(self.StrandA.interactions)):
+            R_norm_list += self.StrandA.interactions[i][1]
+        R_norm_bool = np.array(R_norm_list) < pair_count_upper_dist
+        n_loops = len( signal.find_peaks( np.concatenate( ( np.array([False]), R_norm_bool, np.array([False]) ) ) )[0] )
+        
+        return homol_pairs, homol_pair_dist, terminal_dist, n_loops
+    
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
         return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
