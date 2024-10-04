@@ -20,6 +20,18 @@ CODE & SIMULATION:
     Energy dependant on:
         worm like chain bending (small angle approx -> angular harmonic)
         conditional electrostatic interactions as described in Kornyshev-Leikin theory
+
+NEXT STEPS:
+    Electrostatics functions:
+        Currently not using the latest theory, can be improved by drawing from NON local electrostatics theory.
+        'True' shape of homology recognition well, rather than 'fix', again to draw from electrostatic theory.
+    Non equilibirum & kinetics simulation:
+        Improve dynamic friction coefficient, taking from literature experiments or slendy body approximation.
+        With above, find diffusion constant for extracting timescales of kinetics.
+        Tweak simulation parameters such as; optimum timestep, bond springs, fluctuation correlation length.
+    Speed:
+        Incorporate pre-computation of electrostatic forcefeilds and energies, as done in 'Langevin_simplified/langevin_model_S.py'.
+        Improve alternate 'FastCode' version, which speeds up simulation using by removing class archetiture JIT compilers. Current efforts have reached a bottleneck, where more work must be done to precompile computationally heavy functions, such as those for electrostatics.
 """
 # # # Imports # # #
 from itertools import combinations
@@ -40,28 +52,30 @@ from Electrostatics_classholder import Electrostatics
 
 
 # # # UNITS # # #
-kb = 1 # 1.38e-23
+kb = Boltzmann
 temp = 310.15
 
 # # # PARAMETERS # # #
 # Worm Like Chain Bending
-lp = 5 # persistence length, in coherence length diameter grains of 100 Angstroms
+lp = 5e-8 # persistence length, in coherence length diameter grains of 100 Angstroms
 kappab = lp * kb * 300 # bending stiffness
-s = 0.4 # standard distance through chain between three grains
+s = 0.4e-8 # standard distance through chain between three grains
 k_bend = kappab/(2*s) # Bending stiffness constant
 
 # Spring constant for bonds
-k_spring = 300000000*kb
+k_spring = 9e25 *kb
 
 # Simulation Interaction Parameters
-R_cut = 0.4 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
+theta = 0.8
+R_cut = 0.4e-8 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 6 # avoid interactions between grains in same strand
-wall_dist = 0.2
+wall_dist = 0.2e-8
 homology_set = True # False -> NON homologous
-pair_count_upper_dist = 0.25
+pair_count_upper_dist = 0.25e-8
+k_recognition = 10000*kb # need to choose value
 
 # Langevin 
-dt = 0.000025 # timestep, per unit mass 
+dt = 0.01 # timestep, per unit mass 
 dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
 l_kuhn = lp # persistence length
 slender_body = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
@@ -69,7 +83,7 @@ gamma = 0.5 # or slender body
 
 correlation_length = 5 # number of grains with (fully) correlated fluctuations (note: not coherence_lengths)
 grain_mass = 1
-grain_radius = 0.1 # grain radius
+grain_radius = 0.1e-8 # grain radius
 
 # define parameters for Langevin modified Velocity-Verlet algorithm - M. Kroger
 xi = 2/dt * gamma # used instead of gamma for Langevin modified Velocity-Verlet
@@ -85,9 +99,9 @@ no_fluctuations = False # if True, allows testing for minimum internal energy
 osmotic_pressure_set = False
 soft_vesicle_set = False # if both set False, 'sharp_return' style is used
 # boundary force sizes
-osmotic_pressure_constant = 1000
-soft_vesicle_k = 100
-returning_force_mag = 1000
+osmotic_pressure_constant = 1000 * kb
+soft_vesicle_k = 100 * kb
+returning_force_mag = 1000 * kb
 # Container limits, for soft_vesicle and sharp_return settings
 container_size = 15
 
@@ -95,7 +109,7 @@ container_size = 15
 # # # Aux functions # # #
 
 # # # ELECTROSTATICS # # #
-elstats = Electrostatics(homology_set)
+elstats = Electrostatics(homology_set, theta)
 
 # Initial configuration
 class Start_position:
@@ -155,7 +169,7 @@ class Start_position:
     def create_strand_straight(self):
         grains = [ Grain( np.array([self.xstart, self.ystart, self.zstart]) , np.zeros(3) ) ]
         for i in range(self.total_points-1):
-            grains.append( Grain( grains[-1].position + np.array([0, 0.2, 0]), np.zeros(3) ) )
+            grains.append( Grain( grains[-1].position + np.array([0, 0.2e-8, 0]), np.zeros(3) ) )
         return Strand(grains)
     
     def plot_start(self):
@@ -173,7 +187,7 @@ class Start_position:
 
 
 class Grain():
-    def __init__(self, position: np.array, velocity: np.array, radius = 0.1):
+    def __init__(self, position: np.array, velocity: np.array, radius = grain_radius):
         self.position = np.array(position, dtype=np.float64)
         self.velocity = np.array(velocity, dtype=np.float64)
         self.ext_force = np.zeros(3, dtype=np.float64)
@@ -456,7 +470,7 @@ class Strand:
 
         for isle in self.interactions:
             for i in range(len(isle[0])):
-                dist_walled = isle[1][i]*10**-8 if isle[1][i] >= wall_dist else 0.2e-8 # wall the repulsive potential
+                dist_walled = isle[1][i] if isle[1][i] >= wall_dist else 0.2e-8 # wall the repulsive potential
                 felstat = elstats.force(isle[2][i], dist_walled) # change to metres
                 # identify relevant grains
                 idnt1 = isle[0][i].split(' ')[0]
@@ -469,7 +483,6 @@ class Strand:
                 grain2.update_force(-1*felstat*fvec)
                 
     def f_homology_recognition(self, other):
-        k_recognition = 10000 # need to choose value
         if homology_set:
             for isle in self.interactions:
                 frec_magnitude = 0.0
@@ -509,7 +522,7 @@ class Strand:
             #    continue
             for n in range(len( isle[1] )):
                 g_R = isle[1][n]
-                dist_walled = g_R*10**-8 if g_R >= wall_dist else 0.2e-8 # wall the repulsive potential
+                dist_walled = g_R if g_R >= wall_dist else 0.2e-8 # wall the repulsive potential
                 g_L = isle[2][n]
                 ishomol = type(g_L) == str
                 if not ishomol:
@@ -730,8 +743,8 @@ class Simulation:
             self.interactions_traj.append(self.StrandA.interactions)
     
     def find_endtoend(self, tindex):
-        endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1]) + 0.2
-        endtoendB = np.linalg.norm(self.trajectoryB[tindex][0] - self.trajectoryB[tindex][-1]) + 0.2 # account for size of particle
+        endtoendA = np.linalg.norm(self.trajectoryA[tindex][0] - self.trajectoryA[tindex][-1]) + 2*grain_radius
+        endtoendB = np.linalg.norm(self.trajectoryB[tindex][0] - self.trajectoryB[tindex][-1]) + 2*grain_radius # account for size of particle
         return endtoendA, endtoendB
     
     def find_curvature(self):
