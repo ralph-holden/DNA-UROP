@@ -22,12 +22,12 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
 nsteps = 10000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
-coherence_lengths = 20
+coherence_lengths = 5
 curved = False
 nsegs = 5 * coherence_lengths 
-ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths/2
+ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths*10**-8/2
 # Separation, surface to surface (along x axis)
-sep = 0.22
+sep = 0.22e-8
 #sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # starting shift 
@@ -44,14 +44,14 @@ save_data = True
 log_update = 100 # how often to publish values to the log file
 
 # terminating settings
-recall_steps = 2000
+recall_steps = 5000
 ignore_steps = 2000 + recall_steps
 std_tol = 0.01 
 
 # animation
 animate = True
 frame_hop = 20 # frame dump frequency
-xlim, ylim, zlim = 2, 12, 2 # Box Limits, for viewing, from -lim to +lim
+xlim, ylim, zlim = 2e-8, 12e-8, 2e-8 # Box Limits, for viewing, from -lim to +lim
 
 
 
@@ -102,17 +102,17 @@ for i, item in enumerate(range(nsteps)):
     if i % log_update == 0:
         endtoendA, endtoendB = sim.endtoend_traj[-1][0], sim.endtoend_traj[-1][1]
         logging.info(f'''Step {i} : DATA:
-Simulation Internal Energy = {sim.energy_traj[-1]}
+Simulation Internal Energy = {sim.energy_traj[-1]} kbT
 
-Strand A end to end = {endtoendA} lc
-Strand B end to end = {endtoendB} lc
+Strand A end to end = {endtoendA} m
+Strand B end to end = {endtoendB} m
 Mean Curvature      = {sim.mean_curvature_traj[-1]*180/np.pi} degrees
 STD  Curvature      = {sim.std_curvature_traj[-1]*180/np.pi} degrees
 Number Loops        = {sim.n_loops_traj[-1]}
 
 Total Pairs              = {sim.total_pairs_traj[-1]}
 Homologous Pairs         = {sim.homol_pairs_traj[-1]}
-Homologous Pair Distance = {sim.homol_pair_dist_traj[-1]} lc
+Homologous Pair Distance = {sim.homol_pair_dist_traj[-1]} m
 Number Islands           = {sim.n_islands_traj[-1]}
 
 ...''')
@@ -124,10 +124,10 @@ STD  Curvature             = {sim.std_curvature_traj[-1]*180/np.pi} degrees
 Number Loops               = {sim.n_loops_traj[-1]}
 Total Pairs                = {sim.total_pairs_traj[-1]}
 Homologous Pairs           = {sim.homol_pairs_traj[-1]}
-Homologous Pair Distance   = {sim.homol_pair_dist_traj[-1]} lc
+Homologous Pair Distance   = {sim.homol_pair_dist_traj[-1]} m
 Number Islands             = {sim.n_islands_traj[-1]}
 ...''')
-        if not endtoendA < 50*coherence_lengths and not endtoendA > 50*coherence_lengths or not endtoendB < 50*coherence_lengths and not endtoendB > 50*coherence_lengths: #always True if 'nan'
+        if not endtoendA < 1 and not endtoendA > 1 or not endtoendB < 1 and not endtoendB > 1: #always True if 'nan'
             error_msg = f'STEP {i}: Simulation terminating - lost grains'
             print(error_msg)
             logging.info(error_msg)
@@ -153,7 +153,7 @@ print(f'End to end distance Strand B = {endtoendendB}')
 plt.figure()
 plt.title('Coarse Grain DNA End to End Distance')
 plt.xlabel(f'Timestep, {dt}')
-plt.ylabel('End to End distance, $l_c$')
+plt.ylabel('End to End distance, $m$')
 plt.plot(xsteps, endtoendA, label = 'Strand A')
 plt.plot(xsteps, endtoendB, label = 'Strand B')
 plt.grid(linestyle=':')
@@ -195,7 +195,7 @@ plt.show()
 print()
 print(f'Total Pairs = {sim.total_pairs_traj[-1]}') # may want to remove
 print(f'Homologous Pairs = {sim.homol_pairs_traj[-1]}')
-print(f'Homologous Pair Distance = {sim.homol_pair_dist_traj[-1]} lc')
+print(f'Homologous Pair Distance = {sim.homol_pair_dist_traj[-1]} m')
 print(f'Number islands = {sim.n_islands_traj[-1]}')
 
 plt.figure(figsize=[16,5])
@@ -213,7 +213,7 @@ plt.legend(loc='best')
 plt.subplot(1, 2, 2)
 plt.title('Homologous Pair Separation')
 plt.xlabel(f'Timestep, {dt}')
-plt.ylabel('Distance, $l_c$')
+plt.ylabel('Distance, $m$')
 plt.plot(xsteps, sim.homol_pair_dist_traj, label='All homologous pairs')
 plt.plot(xsteps, sim.terminal_dist_traj, label='End homologous pairs')
 plt.grid(linestyle=':')
@@ -232,14 +232,14 @@ plt.figure(figsize=[16,10])
 plt.subplot(2, 2, 1)
 plt.title('Average Island Length')
 plt.xlabel(f'Timestep, {dt}')
-plt.ylabel('L, $l_c$')
+plt.ylabel('L, $m$')
 plt.plot(xsteps, sim.L_islands_traj)
 plt.grid(linestyle=':')
 
 plt.subplot(2, 2, 2)
 plt.title('Average Island Separation')
 plt.xlabel(f'Timestep, {dt}')
-plt.ylabel('L, $l_c$')
+plt.ylabel('L, $m$')
 plt.plot(xsteps, sim.sep_islands_traj)
 plt.grid(linestyle=':')
 
@@ -253,7 +253,7 @@ plt.grid(linestyle=':')
 plt.subplot(2, 2, 4)
 plt.title('Average Island Distance')
 plt.xlabel(f'Timestep, {dt}')
-plt.ylabel('Interaxial Separation, $l_c$')
+plt.ylabel('Interaxial Separation, $m$')
 plt.plot(xsteps, sim.R_islands_traj)
 plt.grid(linestyle=':')
 
