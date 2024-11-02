@@ -63,7 +63,7 @@ s = 0.4e-8 # standard distance through chain between three grains
 k_bend = kappab/(2*s) # Bending stiffness constant
 
 # Spring constant for bonds
-k_spring = 9e25 *kb
+k_spring = 100*kb
 
 # Simulation Interaction Parameters
 theta = 0.8
@@ -72,25 +72,20 @@ self_interaction_limit = 6 # avoid interactions between grains in same strand
 wall_dist = 0.2e-8
 homology_set = True # False -> NON homologous
 pair_count_upper_dist = 0.25e-8
-k_recognition = 10000*kb # need to choose value
+k_recognition = 0 #10000*kb # need to choose value
 
 # Langevin 
-dt = 0.01 # timestep, per unit mass 
+dt_set = 0.05 # timestep, per unit mass 
 dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
 l_kuhn = lp # persistence length
-slender_body = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / 0.2 ) # damping coefficient - perpendicular motion case from Slender Body Theory of Stokes flow
-gamma = 0.5 # or slender body
 
-correlation_length = 5 # number of grains with (fully) correlated fluctuations (note: not coherence_lengths)
+correlation_length_set = 1 # number of grains with (fully) correlated fluctuations (note: not coherence_lengths)
 grain_mass = 1
 grain_radius = 0.1e-8 # grain radius
 
 # define parameters for Langevin modified Velocity-Verlet algorithm - M. Kroger
-xi = 2/dt * gamma # used instead of gamma for Langevin modified Velocity-Verlet
-half_dt = dt/2
-applied_friction_coeff = (2 - xi*dt)/(2 + xi*dt)
-fluctuation_size = np.sqrt( grain_mass * kb * temp * xi * half_dt ) # takes dt into account. should it be /grain_mass ?
-rescaled_position_step = 2*dt / (2 + xi*dt)
+# slender body approximation - lateral movement
+xi_set = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / (grain_radius*2) ) 
 
 no_fluctuations = False # if True, allows testing for minimum internal energy
 
@@ -101,15 +96,30 @@ soft_vesicle_set = False # if both set False, 'sharp_return' style is used
 # boundary force sizes
 osmotic_pressure_constant = 1000 * kb
 soft_vesicle_k = 100 * kb
-returning_force_mag = 1000 * kb
+returning_force_mag = 1e15 * kb
 # Container limits, for soft_vesicle and sharp_return settings
-container_size = 15
+container_size = 3e-8
 
 
 # # # Aux functions # # #
 
 # # # ELECTROSTATICS # # #
 elstats = Electrostatics(homology_set, theta)
+
+# precomputed interactions for simulation speed
+# just for simplest case
+# parameters
+precompute_grid_resolution = 2500 # per 0.1 lc
+n_Rsteps = int( (R_cut-wall_dist)/0.1e-8 * precompute_grid_resolution )
+R_precompute = np.linspace(wall_dist, R_cut, n_Rsteps)
+L_precompute = range(100)
+
+# build lists
+force_homologous    = []
+eng_homologous      = []
+for R_slice in R_precompute:
+        force_homologous    += [elstats.force('homol 0', R_slice)]
+        eng_homologous      += [elstats.find_energy('homol 0', R_slice)]
 
 # Initial configuration
 class Start_position:
@@ -231,11 +241,11 @@ class Strand:
             # Vector between consecutive grains
             delta = self.dnastr[i+1].position - self.dnastr[i].position
             distance = np.linalg.norm(delta)
-            force_magnitude = k_spring * (distance - 2*self.dnastr[0].radius)
-            force_direction = delta / distance if distance != 0 else np.zeros(3)
+            force_magnitude = -k_spring * (distance - 2*self.dnastr[0].radius)
+            force_direction = delta / distance #if distance != 0.0 else np.zeros(3)
             force = force_magnitude * force_direction
-            self.dnastr[i].update_force(force)
-            self.dnastr[i+1].update_force(-force)
+            self.dnastr[i].update_force(-force)
+            self.dnastr[i+1].update_force(force)
             
     def apply_distance_constraints(self):
         for i in range(self.num_segments-1):
@@ -257,54 +267,6 @@ class Strand:
                 self.dnastr[j].position += inter_vector * (required_distance - distance)
                 
     # WLC bending energies
-    def angle_derivative(self, x_p1, x_m, x_m1,    y_p1, y_m, y_m1,    z_p1, z_m, z_m1):
-        
-        # Common terms used in multiple places
-        term_x_m1_m = (x_m1 - x_m)**2 + (y_m1 - y_m)**2 + (z_m1 - z_m)**2
-        term_x_m_p1 = (x_m - x_p1)**2 + (y_m - y_p1)**2 + (z_m - z_p1)**2
-        term_cross_product = (x_m1 - x_m) * (x_m - x_p1) + (y_m1 - y_m) * (y_m - y_p1) + (z_m1 - z_m) * (z_m - z_p1)
-    
-        # Numerator terms
-        term1 = (-x_m1 + 2*x_m - x_p1) * term_x_m1_m * term_x_m_p1
-        term2 = (-x_m + x_p1) * term_x_m1_m * term_cross_product
-        term3 = (x_m1 - x_m) * term_x_m_p1 * term_cross_product
-    
-        numerator = term1 + term2 + term3
-    
-        # Denominator terms
-        denominator = (term_x_m1_m**(3/2)) * (term_x_m_p1**(3/2))
-    
-        # Final expression
-        result = numerator / denominator
-        return result
-
-    def f_wlc_new(self):
-
-        # extract positions for grain attributes
-        pos_array = []
-        for i in range(self.num_segments):
-            pos_array.append(self.dnastr[i].position)
-        pos_array = np.array(pos_array)
-            
-        # all middle strand forces, sum of m-1 and m+1 contributions
-        x_m     , y_m     , z_m      = pos_array[1:-1,0], pos_array[1:-1,1], pos_array[1:-1,2] # all middle strands
-        x_minus1, y_minus1, z_minus1 = pos_array[:-2,0] , pos_array[:-2,1] , pos_array[:-2,2]  # m-1 array
-        x_plus1 , y_plus1 , z_plus1  = pos_array[2:,0]  , pos_array[2:,1]  , pos_array[2:,2]   # m+1 array
-        
-        # derivatives for x
-        xforces = -k_bend * self.angle_derivative(x_plus1, x_m, x_minus1,   y_plus1, y_m, y_minus1,   z_plus1, z_m, z_minus1)
-        
-        # derivatives for y
-        yforces = -k_bend * self.angle_derivative(y_plus1, y_m, y_minus1,   x_plus1, x_m, x_minus1,   z_plus1, z_m, z_minus1)
-        
-        # derivatives for z
-        zforces = -k_bend * self.angle_derivative(z_plus1, z_m, z_minus1,   x_plus1, x_m, x_minus1,   y_plus1, y_m, y_minus1)
-        
-        # apply forces in grain attributes
-        # if applied to single grain only
-        for i in range(1,self.num_segments-1):
-                self.dnastr[i].update_force(np.array([ xforces[i-1], yforces[i-1], zforces[i-1]]))
-        
     def f_wlc(self):
         
         # reset angle_list attribute
@@ -326,11 +288,11 @@ class Strand:
             if np.isclose(theta,np.pi):
                 continue # angle equivalent to 0 therefore no torque required
                 
-            force_magnitude = -k_bend * (theta - np.pi) 
+            force_magnitude = -k_bend * abs(theta - np.pi) 
             force_direction = r1+r2
             force_direction /= np.linalg.norm(force_direction) if np.linalg.norm(force_direction) != 0 else 1
             force = force_magnitude * force_direction
-            self.dnastr[i].update_force(force)
+            self.dnastr[i].update_force(-force)
         
     def find_angle(self, seg_index):
         p1 = self.dnastr[seg_index-1].position
@@ -471,7 +433,8 @@ class Strand:
         for isle in self.interactions:
             for i in range(len(isle[0])):
                 dist_walled = isle[1][i] if isle[1][i] >= wall_dist else 0.2e-8 # wall the repulsive potential
-                felstat = elstats.force(isle[2][i], dist_walled) # change to metres
+                close_index = np.argmax(isle[1][i] <= R_precompute)
+                felstat = force_homologous[close_index] if isle[2][i]=='homol 0' else elstats.force(isle[2][i], dist_walled) 
                 # identify relevant grains
                 idnt1 = isle[0][i].split(' ')[0]
                 idnt2 = isle[0][i].split(' ')[1]
@@ -479,8 +442,8 @@ class Strand:
                 grain2 = self.dnastr[ int(idnt2[1:]) ] if idnt2[0]=='s' else other.dnastr[ int(idnt2[1:]) ]
                 fvec = grain2.position - grain1.position
                 fvec /= np.linalg.norm(fvec) if np.linalg.norm(fvec) != 0 else 1
-                grain1.update_force(+1*felstat*fvec)
-                grain2.update_force(-1*felstat*fvec)
+                grain1.update_force(-1*felstat*fvec)
+                grain2.update_force(+1*felstat*fvec)
                 
     def f_homology_recognition(self, other):
         if homology_set:
@@ -518,17 +481,16 @@ class Strand:
         '''
         energy = 0.0
         for isle in self.interactions:
-            #if isle[1] == [] or isle[2] == []:
-            #    continue
             for n in range(len( isle[1] )):
                 g_R = isle[1][n]
                 dist_walled = g_R if g_R >= wall_dist else 0.2e-8 # wall the repulsive potential
                 g_L = isle[2][n]
                 ishomol = type(g_L) == str
                 if not ishomol:
-                    energy += elstats.find_energy(g_L, dist_walled) - elstats.find_energy(g_L-1, g_R*10**-8) # remove 'built-up' energy over L w/ different R
+                    energy += elstats.find_energy(g_L, dist_walled) - elstats.find_energy(g_L-1, g_R) # remove 'built-up' energy over L w/ different R
                 elif ishomol:
-                    energy += elstats.find_energy(g_L, dist_walled) # energy is per unit length
+                    close_index = np.argmax(g_R <= R_precompute)
+                    energy += eng_homologous[close_index] if g_L=='homol 0' else elstats.find_energy(g_L, dist_walled) # energy is per unit length
         return energy / (kb*300) # give energy in kbT units
         
     def eng_elastic(self) -> float:
@@ -584,14 +546,21 @@ class Simulation:
         #self.record()
 
     # for time integration / evolution
-    def run_step(self, fluctuation_factor=1.0):
+    def run_step(self, fluctuation_factor=1.0, dt=dt_set, xi=xi_set, cl = correlation_length_set):
         '''
         Langevin Modified Velocity-Verlet Algorithm
         Taken from Models for polymeric and anisotropic liquids, M. Kröger, 2005
         '''
-        # reset and calculate external forces, information stored in Grain attribute
-        #self.calc_external_force()
+        # # # SETTINGS # # # 
+        self.dt = dt
+        self.xi = xi
+        self.correlation_length = cl
         
+        self.fluctuation_size = np.sqrt( grain_mass * kb * temp * xi * dt/2 )
+        self.applied_friction_coeff = (2 - xi*dt)/(2 + xi*dt)
+        self.rescaled_position_step = 2*dt / (2 + xi*dt)
+        
+        # # # TIME INTEGRATION # # #
         # take random fluctuation length for each 'correlation length'
         fluctuation_list = self.langevin_fluctuations(fluctuation_factor)
         
@@ -638,11 +607,11 @@ class Simulation:
         fluctuationA , fluctuationB = [] , []
         
         # build lists, may have different lengths
-        adjusted_fluctuation_size = fluctuation_size * fluctuation_factor
-        for i in range(int(np.ceil(self.StrandA.num_segments/correlation_length))):
-            fluctuationA += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * correlation_length
-        for i in range(int(np.ceil(self.StrandB.num_segments/correlation_length))):
-            fluctuationB += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * correlation_length
+        adjusted_fluctuation_size = self.fluctuation_size * fluctuation_factor 
+        for i in range(int(np.ceil(self.StrandA.num_segments/self.correlation_length))):
+            fluctuationA += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * self.correlation_length
+        for i in range(int(np.ceil(self.StrandB.num_segments/self.correlation_length))):
+            fluctuationB += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * self.correlation_length
         
         # correct length
         fluctuationA, fluctuationB = fluctuationA[:self.StrandA.num_segments] , fluctuationB[:self.StrandB.num_segments] 
@@ -654,17 +623,17 @@ class Simulation:
         
     def update_velocities_first_halfstep(self, fluctuation_list):
         for i, grain in enumerate(self.StrandA.dnastr + self.StrandB.dnastr):
-            grain.velocity += half_dt * grain.ext_force / grain_mass # apply external force
+            grain.velocity += self.dt/2 * grain.ext_force / grain_mass # apply external force
             grain.velocity += fluctuation_list[i] # apply fluctuation 
     
     def update_positions(self):
         for grain in self.StrandA.dnastr + self.StrandB.dnastr:
-            grain.update_position( rescaled_position_step )     
+            grain.update_position( self.rescaled_position_step )     
             
     def update_velocities_second_halfstep(self, fluctuation_list):
         for i, grain in enumerate(self.StrandA.dnastr + self.StrandB.dnastr):
-            grain.velocity *= applied_friction_coeff # apply friction
-            grain.velocity += half_dt * grain.ext_force / grain_mass # apply external force
+            grain.velocity *= self.applied_friction_coeff # apply friction
+            grain.velocity += self.dt/2 * grain.ext_force / grain_mass # apply external force
             grain.velocity += fluctuation_list[i] # apply fluctuation 
                         
     def apply_box(self):
