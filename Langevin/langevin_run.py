@@ -6,7 +6,7 @@ Created on Fri Jul 19 10:20:05 2024
 """
 # # # IMPORTS # # #
 from langevin_model import Grain, Strand, Simulation, Start_position, np, Tuple, combinations
-from langevin_model import kb, temp, kappab, lp, dt, gamma, homology_set, xi
+from langevin_model import kb, temp, kappab, lp, dt_set, homology_set, xi_set
 import pickle
 import sys
 import os
@@ -20,14 +20,16 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 
 # # # SIMULATION PARMAMETERS # # #
 # Run the Monte Carlo algorithm for given number of steps with a progress bar
-nsteps = 10000
+nsteps = 50000
+# Run prior energy minimisation
+do_eng_min, nsteps_eng_min = True, 5000
 # Length of Segments, where each segment/grain is 1/5 helical coherence length
 coherence_lengths = 5
 curved = False
 nsegs = 5 * coherence_lengths 
 ystart = coherence_lengths/(2*np.pi) if curved else -1*coherence_lengths*10**-8/2
 # Separation, surface to surface (along x axis)
-sep = 0.22e-8
+sep = 0.23e-8
 #sep += 0.2 # augment for surface to surface
 xstartA, xstartB = -sep/2, +sep/2
 # starting shift 
@@ -36,22 +38,26 @@ yshift = 0.0
 
 # # # DATA OUTPUT PARAMETERS # # #
 # data output directory
-mydir = './Data_outputs/test_update/'
+mydir = './Data_outputs/test_params/'
 if not os.path.exists(mydir):
     os.makedirs(mydir)
 # save data
-save_data = True
-log_update = 100 # how often to publish values to the log file
+save_data = False
+log_update = 1000 # how often to publish values to the log file
+# save pairs
+save_pairs = True
+# save final DNA positions
+save_final = True
 
 # terminating settings
-recall_steps = 5000
-ignore_steps = 2000 + recall_steps
+recall_steps = 50000
+ignore_steps = 200000 + recall_steps
 std_tol = 0.01 
 
 # animation
 animate = True
-frame_hop = 20 # frame dump frequency
-xlim, ylim, zlim = 2e-8, 12e-8, 2e-8 # Box Limits, for viewing, from -lim to +lim
+frame_hop = 100 # frame dump frequency
+xlim, ylim, zlim = 3e-8, 6e-8, 3e-8 # Box Limits, for viewing, from -lim to +lim
 
 
 
@@ -75,9 +81,8 @@ log_filename = datetime.now().strftime(mydir+'LOG_%Y%m%d_%H%M%S.log')
 logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(message)s')
 logging.info('Simulation started')
 logging.info(f'''Simulation parameters:
-    gamma    : {gamma}
-    xi       : {xi}
-    dt       : {dt}
+    xi       : {xi_set}
+    dt       : {dt_set}
     nsteps   : {nsteps}
     num parts: {nsegs}
     num l_c  : {coherence_lengths}
@@ -88,8 +93,22 @@ Starting conditions:
     curvature : {curved}
              ''')
 
+# Run energy minimisation
+if do_eng_min:
+    logging_msg = f'''Running energy minimisation for {nsteps_eng_min} steps
+    Initial energy: {sim.find_energy()} kbT
+                 '''
+    logging.info(logging_msg), print(logging_msg)
+    for i in range(nsteps_eng_min):
+        sim.run_step(fluctuation_factor=0.0, dt=dt_set/50, xi=20/dt_set, cl=1)
+    logging_msg = f'''Energy minimisation complete
+    Final energy: {sim.energy_traj[-1]} kbT
+                 '''
+    logging.info(logging_msg), print(logging_msg)
+
+# Run simulation
 for i, item in enumerate(range(nsteps)):
-    sim.run_step()
+    sim.run_step(fluctuation_factor=1.0)
     
     length = 20
     progress = (i + 1) / nsteps
@@ -101,7 +120,7 @@ for i, item in enumerate(range(nsteps)):
     # log file & data output
     if i % log_update == 0:
         endtoendA, endtoendB = sim.endtoend_traj[-1][0], sim.endtoend_traj[-1][1]
-        logging.info(f'''Step {i} : DATA:
+        logging_msg = f'''STEP {i} : DATA:
 Simulation Internal Energy = {sim.energy_traj[-1]} kbT
 
 Strand A end to end = {endtoendA} m
@@ -115,30 +134,19 @@ Homologous Pairs         = {sim.homol_pairs_traj[-1]}
 Homologous Pair Distance = {sim.homol_pair_dist_traj[-1]} m
 Number Islands           = {sim.n_islands_traj[-1]}
 
-...''')
-        print(f'''\rSimulation Internal Energy = {sim.energy_traj[-1]}
-Strand A end to end        = {endtoendA} lc
-Strand B end to end        = {endtoendB} lc
-Mean Curvature             = {sim.mean_curvature_traj[-1]*180/np.pi} degrees
-STD  Curvature             = {sim.std_curvature_traj[-1]*180/np.pi} degrees
-Number Loops               = {sim.n_loops_traj[-1]}
-Total Pairs                = {sim.total_pairs_traj[-1]}
-Homologous Pairs           = {sim.homol_pairs_traj[-1]}
-Homologous Pair Distance   = {sim.homol_pair_dist_traj[-1]} m
-Number Islands             = {sim.n_islands_traj[-1]}
-...''')
+...'''
+        logging.info(logging_msg), print('\r'+logging_msg)
+        
         if not endtoendA < 1 and not endtoendA > 1 or not endtoendB < 1 and not endtoendB > 1: #always True if 'nan'
             error_msg = f'STEP {i}: Simulation terminating - lost grains'
-            print(error_msg)
-            logging.info(error_msg)
+            print(error_msg), logging.info(error_msg)
             break # end simulation
             
         if i>ignore_steps and np.std( sim.homol_pairs_traj[-recall_steps:] )/sim.StrandA.num_segments < std_tol:
             finish_msg = f'STEP {i}: Simulation terminating - pairs converged'
-            print(finish_msg)
-            logging.info(finish_msg)
+            print(finish_msg), logging.info(finish_msg)
             break # end simulation
-        
+       
 # extracting data from trajectories
 xsteps = np.linspace(0,len(sim.trajectoryA),len(sim.trajectoryA))
 endtoendA, endtoendB = np.array(sim.endtoend_traj)[:,0], np.array(sim.endtoend_traj)[:,1]
@@ -152,7 +160,7 @@ print(f'End to end distance Strand B = {endtoendendB}')
 
 plt.figure()
 plt.title('Coarse Grain DNA End to End Distance')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('End to End distance, $m$')
 plt.plot(xsteps, endtoendA, label = 'Strand A')
 plt.plot(xsteps, endtoendB, label = 'Strand B')
@@ -167,7 +175,7 @@ print(f'Internal Energy = {sim.energy_traj[-1]} kbT')
 
 plt.figure()
 plt.title('Coarse Grain DNA Internal Energy')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('Energy, $k_bT$')
 plt.plot(xsteps, sim.energy_traj)
 plt.grid(linestyle=':')
@@ -181,7 +189,7 @@ print(f'STD  Curvature = {sim.std_curvature_traj[-1]*180/np.pi} degrees')
 
 plt.figure()
 plt.title('Mean Curvature')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('Curvature, degrees')
 plt.plot(xsteps, abs(np.array(sim.mean_curvature_traj)*180/np.pi) + np.array(sim.std_curvature_traj)*180/np.pi, label='+std', color='orange')
 plt.plot(xsteps, abs(np.array(sim.mean_curvature_traj)*180/np.pi), label='mean')
@@ -202,7 +210,7 @@ plt.figure(figsize=[16,5])
 
 plt.subplot(1, 2, 1)
 plt.title('Pair Number')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('Number of Pairs')
 plt.plot(xsteps, sim.total_pairs_traj, label='Total Pairs')
 plt.plot(xsteps, sim.homol_pairs_traj, label='Homologous Pairs')
@@ -212,7 +220,7 @@ plt.legend(loc='best')
 
 plt.subplot(1, 2, 2)
 plt.title('Homologous Pair Separation')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('Distance, $m$')
 plt.plot(xsteps, sim.homol_pair_dist_traj, label='All homologous pairs')
 plt.plot(xsteps, sim.terminal_dist_traj, label='End homologous pairs')
@@ -231,28 +239,28 @@ plt.figure(figsize=[16,10])
 
 plt.subplot(2, 2, 1)
 plt.title('Average Island Length')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('L, $m$')
 plt.plot(xsteps, sim.L_islands_traj)
 plt.grid(linestyle=':')
 
 plt.subplot(2, 2, 2)
 plt.title('Average Island Separation')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('L, $m$')
 plt.plot(xsteps, sim.sep_islands_traj)
 plt.grid(linestyle=':')
 
 plt.subplot(2, 2, 3)
 plt.title('Average Island Number')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('Number of Islands')
 plt.plot(xsteps, sim.n_islands_traj)
 plt.grid(linestyle=':')
 
 plt.subplot(2, 2, 4)
 plt.title('Average Island Distance')
-plt.xlabel(f'Timestep, {dt}')
+plt.xlabel(f'Timestep, {dt_set}')
 plt.ylabel('Interaxial Separation, $m$')
 plt.plot(xsteps, sim.R_islands_traj)
 plt.grid(linestyle=':')
@@ -327,5 +335,17 @@ if animate:
 if save_data:
     with open(mydir+'test_simulation.dat','wb') as data_f:
         pickle.dump([sim.trajectoryA, sim.trajectoryB], data_f)
+
+# pad pair data to nsteps and save
+if save_pairs:
+    padding_array = np.zeros(nsteps-len(xsteps)) if not do_eng_min else np.zeros(nsteps+nsteps_eng_min-len(xsteps))
+    padding_array[:] = np.nan
+    pairs_padded = np.concatenate( (sim.homol_pairs_traj, padding_array) )
+
+    np.savetxt(mydir+'pair_data.txt', pairs_padded, fmt='%s')
+    
+if save_final:
+    np.savetxt(mydir+'final_trajA', sim.trajectoryA[-1], fmt='%s')
+    np.savetxt(mydir+'final_trajB', sim.trajectoryB[-1], fmt='%s')
 
 logging.info('Simulation completed')
