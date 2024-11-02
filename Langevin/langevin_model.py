@@ -71,21 +71,22 @@ R_cut = 0.4e-8 # cut off distance for electrostatic interactions, SURFACE to SUR
 self_interaction_limit = 6 # avoid interactions between grains in same strand
 wall_dist = 0.2e-8
 homology_set = True # False -> NON homologous
-pair_count_upper_dist = 0.25e-8
+pair_count_upper_dist = 0.229e-8 # from half-width of potential well
 k_recognition = 0 #10000*kb # need to choose value
 
 # Langevin 
-dt_set = 0.05 # timestep, per unit mass 
-dynamic_coefficient_friction = 0.00069130 # in Pa*s, for water at 310.15 K & 1 atm, from NIST
+dt_set = 1e-12 # timestep
+mu = 0.00069130 # dynamic coefficient friction in Pa*s, for water at 310.15 K & 1 atm, from NIST
 l_kuhn = lp # persistence length
 
 correlation_length_set = 1 # number of grains with (fully) correlated fluctuations (note: not coherence_lengths)
-grain_mass = 1
+grain_mass = 6.58e-21
 grain_radius = 0.1e-8 # grain radius
 
-# define parameters for Langevin modified Velocity-Verlet algorithm - M. Kroger
-# slender body approximation - lateral movement
-xi_set = 4*np.pi * dynamic_coefficient_friction * l_kuhn / np.log( l_kuhn / (grain_radius*2) ) 
+# define parameters for Langevin modified Velocity-Verlet algorithm
+zeta_set = 4*np.pi * mu * l_kuhn / np.log( l_kuhn / (grain_radius*2) ) 
+# alternative: Stokes equation
+#zeta_set = 6*np.pi * grain_radius * dynamic_coefficient_friction
 
 no_fluctuations = False # if True, allows testing for minimum internal energy
 
@@ -546,33 +547,67 @@ class Simulation:
         #self.record()
 
     # for time integration / evolution
-    def run_step(self, fluctuation_factor=1.0, dt=dt_set, xi=xi_set, cl = correlation_length_set):
+    def run_step(self, method='lammps',fluctuation_factor=1.0, dt=dt_set, zeta=zeta_set, correlation_length = correlation_length_set):
         '''
         Langevin Modified Velocity-Verlet Algorithm
-        Taken from Models for polymeric and anisotropic liquids, M. Kröger, 2005
+        2 Algorithms:
+            'lammps'
+            'kroger' - Taken from Models for polymeric and anisotropic liquids, M. Kröger, 2005
         '''
-        # # # SETTINGS # # # 
-        self.dt = dt
-        self.xi = xi
-        self.correlation_length = cl
         
-        self.fluctuation_size = np.sqrt( grain_mass * kb * temp * xi * dt/2 )
-        self.applied_friction_coeff = (2 - xi*dt)/(2 + xi*dt)
-        self.rescaled_position_step = 2*dt / (2 + xi*dt)
+        if method=='lammps':
+            self.fluctuation_size = np.sqrt( dt * kb * temp * zeta / grain_mass )
+            
+            # # # TIME INTEGRATION # # #
+            # take random fluctuation length for each 'correlation length'
+            fluctuation_list = self.langevin_fluctuations(fluctuation_factor, correlation_length)
+            
+            # update velocities first halfstep
+            for i, grain in enumerate(self.StrandA.dnastr + self.StrandB.dnastr):
+                grain.velocity += dt/2 * grain.ext_force / grain_mass  # apply external force
+                grain.velocity -= dt/2 * zeta * grain.velocity # apply friction
+                grain.velocity += fluctuation_list[i] # apply fluctuation 
+            
+            # update positions
+            for grain in self.StrandA.dnastr + self.StrandB.dnastr:
+                grain.update_position( dt ) 
+            
+            # reset and calculate external forces
+            self.calc_external_force()
+            
+            # update velocities second halfstep 
+            for i, grain in enumerate(self.StrandA.dnastr + self.StrandB.dnastr):
+                grain.velocity += dt/2 * grain.ext_force / grain_mass  # apply external force
+                grain.velocity -= dt/2 * zeta * grain.velocity # apply friction
+                grain.velocity += fluctuation_list[i] # apply fluctuation
         
-        # # # TIME INTEGRATION # # #
-        # take random fluctuation length for each 'correlation length'
-        fluctuation_list = self.langevin_fluctuations(fluctuation_factor)
         
-        self.update_velocities_first_halfstep( fluctuation_list )
-        
-        self.update_positions()
-        #self.StrandA.apply_distance_constraints(), self.StrandB.apply_distance_constraints()
-        
-        # reset and calculate external forces
-        self.calc_external_force()
-        
-        self.update_velocities_second_halfstep( fluctuation_list )
+        elif method=='kroger':
+            self.fluctuation_size = np.sqrt( 1/grain_mass * kb * temp * zeta * dt/2 )
+            self.applied_friction_coeff = (2 - zeta*dt)/(2 + zeta*dt)
+            self.rescaled_position_step = 2*dt / (2 + zeta*dt)
+            
+            # # # TIME INTEGRATION # # #
+            # take random fluctuation length for each 'correlation length'
+            fluctuation_list = self.langevin_fluctuations(fluctuation_factor, correlation_length)
+            
+            # update velocities first halfstep
+            for i, grain in enumerate(self.StrandA.dnastr + self.StrandB.dnastr):
+                grain.velocity += self.dt/2 * grain.ext_force / grain_mass # apply external force
+                grain.velocity += fluctuation_list[i] # apply fluctuation 
+            
+            # update positions
+            for grain in self.StrandA.dnastr + self.StrandB.dnastr:
+                grain.update_position( self.rescaled_position_step ) 
+            
+            # reset and calculate external forces
+            self.calc_external_force()
+            
+            # update velocities second halfstep 
+            for i, grain in enumerate(self.StrandA.dnastr + self.StrandB.dnastr):
+                grain.velocity *= self.applied_friction_coeff # apply friction
+                grain.velocity += self.dt/2 * grain.ext_force / grain_mass # apply external force
+                grain.velocity += fluctuation_list[i] # apply fluctuation 
         
         # save data
         self.record()
@@ -591,7 +626,7 @@ class Simulation:
         self.StrandA.f_homology_recognition(self.StrandB)
         self.apply_box()
         
-    def langevin_fluctuations(self, fluctuation_factor):
+    def langevin_fluctuations(self, fluctuation_factor, correlation_length):
         '''
         Build list of fluctuations for each grain. Correlated within each 'correlation length'.
         Correlation length usually kuhn length (25) or, less often, helical coherence length (5)
@@ -608,10 +643,10 @@ class Simulation:
         
         # build lists, may have different lengths
         adjusted_fluctuation_size = self.fluctuation_size * fluctuation_factor 
-        for i in range(int(np.ceil(self.StrandA.num_segments/self.correlation_length))):
-            fluctuationA += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * self.correlation_length
-        for i in range(int(np.ceil(self.StrandB.num_segments/self.correlation_length))):
-            fluctuationB += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * self.correlation_length
+        for i in range(int(np.ceil(self.StrandA.num_segments/correlation_length))):
+            fluctuationA += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * correlation_length
+        for i in range(int(np.ceil(self.StrandB.num_segments/correlation_length))):
+            fluctuationB += [(np.random.normal(0, adjusted_fluctuation_size, size=3) )] * correlation_length
         
         # correct length
         fluctuationA, fluctuationB = fluctuationA[:self.StrandA.num_segments] , fluctuationB[:self.StrandB.num_segments] 
