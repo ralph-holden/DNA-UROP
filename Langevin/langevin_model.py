@@ -55,7 +55,9 @@ from Electrostatics_classholder import Electrostatics
 kb = Boltzmann
 temp = 310.15
 
+
 # # # PARAMETERS # # #
+
 # Worm Like Chain Bending
 lp = 5e-8 # persistence length, in coherence length diameter grains of 100 Angstroms
 kappab = lp * kb * 300 # bending stiffness
@@ -69,24 +71,25 @@ k_spring = 100*kb
 theta = 0.8
 R_cut = 0.4e-8 # cut off distance for electrostatic interactions, SURFACE to SURFACE distance, in helical coherence lengths (100 Angstroms) therefore 7.5 nm in real units
 self_interaction_limit = 6 # avoid interactions between grains in same strand
-wall_dist = 0.2e-8
+wall_dist = 0.19e-8
 homology_set = True # False -> NON homologous
-pair_count_upper_dist = 0.229e-8 # from half-width of potential well
+pair_count_upper_dist = 0.225e-8#29e-8 # from half-width of potential well
 k_recognition = 0 #10000*kb # need to choose value
 
 # Langevin 
-dt_set = 1e-12 # timestep
-mu = 0.00069130 # dynamic coefficient friction in Pa*s, for water at 310.15 K & 1 atm, from NIST
+dt_set = 1e-14 # timestep
+mu = 0.00071053502 # dynamic coefficient friction in Pa*s, for water at 310.15 K & 1 atm, from NIST
 l_kuhn = lp # persistence length
 
 correlation_length_set = 1 # number of grains with (fully) correlated fluctuations (note: not coherence_lengths)
-grain_mass = 6.58e-21
+grain_mass = 6.58e-24 # kg
 grain_radius = 0.1e-8 # grain radius
 
 # define parameters for Langevin modified Velocity-Verlet algorithm
 zeta_set = 4*np.pi * mu * l_kuhn / np.log( l_kuhn / (grain_radius*2) ) 
 # alternative: Stokes equation
-#zeta_set = 6*np.pi * grain_radius * dynamic_coefficient_friction
+#zeta_set = 6*np.pi * grain_radius * mu
+zeta_set = 1e-3
 
 no_fluctuations = False # if True, allows testing for minimum internal energy
 
@@ -95,9 +98,9 @@ no_fluctuations = False # if True, allows testing for minimum internal energy
 osmotic_pressure_set = False
 soft_vesicle_set = False # if both set False, 'sharp_return' style is used
 # boundary force sizes
-osmotic_pressure_constant = 1000 * kb
+osmotic_pressure_constant = 100 * kb
 soft_vesicle_k = 100 * kb
-returning_force_mag = 1e15 * kb
+returning_force_mag = 1000 * kb
 # Container limits, for soft_vesicle and sharp_return settings
 container_size = 3e-8
 
@@ -150,6 +153,10 @@ class Start_position:
         self.xstart = xstart
         self.ystart = ystart
         self.zstart = zstart
+        
+        self.velocity_size = np.sqrt( kb * temp * zeta_set / grain_mass )
+        #self.velocity_size = np.sqrt( 3 * kb * temp / grain_mass )
+        #self.velocity_size = np.sqrt( 3 * kb * temp / grain_mass * mu)
     
     def create_strand_curved(self):
         # Create arrays for x, y, and z coordinates
@@ -173,14 +180,20 @@ class Start_position:
         grains = []
         for i in range( self.total_points ):
             xi, yi, zi = self.x[i], self.y[i], self.z[i]
-            grains.append( Grain( [xi, yi, zi], np.zeros(3) ) )
+            grains.append( Grain( [xi, yi, zi], np.random.normal(0, self.velocity_size, size=3) ) )
         
         return Strand(grains)
     
     def create_strand_straight(self):
-        grains = [ Grain( np.array([self.xstart, self.ystart, self.zstart]) , np.zeros(3) ) ]
+        grains = [ Grain( np.array([self.xstart, self.ystart, self.zstart]) , np.random.normal(0, self.velocity_size, size=3) ) ]
         for i in range(self.total_points-1):
-            grains.append( Grain( grains[-1].position + np.array([0, 0.2e-8, 0]), np.zeros(3) ) )
+            grains.append( Grain( grains[-1].position + np.array([0, 0.2e-8, 0]), np.random.normal(0, self.velocity_size, size=3) ) )
+        return Strand(grains)
+    
+    def reload_trajectory(self, pos, vel):
+        grains = []
+        for i in range(len(pos)):
+            grains.append( Grain( np.array([pos[i][0], pos[i][1], pos[i][2]]) , np.array([vel[i][0], vel[i][1], vel[i][2]]) ) )
         return Strand(grains)
     
     def plot_start(self):
@@ -200,7 +213,7 @@ class Start_position:
 class Grain():
     def __init__(self, position: np.array, velocity: np.array, radius = grain_radius):
         self.position = np.array(position, dtype=np.float64)
-        self.velocity = np.array(velocity, dtype=np.float64)
+        self.velocity = np.array(velocity, dtype=np.float64) 
         self.ext_force = np.zeros(3, dtype=np.float64)
         self.radius = radius
 
@@ -699,11 +712,11 @@ class Simulation:
                 centremass_position = np.zeros(3)
                 for g in strand.dnastr:
                     centremass_position += g.position
-                centremass_position /= strand.num_segments
+                    centremass_position /= strand.num_segments
                 
                 if np.linalg.norm(centremass_position) > container_size:
                     for g in strand.dnastr:
-                        g.update_force( -returning_force_mag * centremass_position/np.linalg.norm(centremass_position) )
+                        g.update_force( returning_force_mag * centremass_position/np.linalg.norm(centremass_position) )
       
     # for data analysis
     def record(self):
@@ -827,3 +840,13 @@ class Simulation:
     def find_energy(self):
         '''Includes electrostatic and WLC bending energies ONLY'''
         return self.StrandA.eng_elastic() + self.StrandB.eng_elastic() + self.StrandA.eng_elstat(self.StrandB)
+    
+    def save_velocities(self):
+        '''For final trajectory output'''
+        velocity_listA = []
+        velocity_listB = []
+        for strand in self.StrandA, self.StrandB:
+            for g in strand.dnastr:
+                velocity_listA.append( g.velocity )
+                velocity_listB.append( g.velocity )
+        return velocity_listA, velocity_listB
